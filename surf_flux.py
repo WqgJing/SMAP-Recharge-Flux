@@ -106,10 +106,10 @@ if __name__ == "__main__":
     t, q = synth_surface_flux(
         total_days=15,
         dt_minutes=30,
-        seed=7,
-        et_base_mm_day=3.0,
-        et_amp_mm_day=2.0,
-        storm_rate_per_day=0.6,
+        seed=1,
+        et_base_mm_day=1,
+        et_amp_mm_day=0.0,
+        storm_rate_per_day=0.1,
         dry_start_hours=24,
     )
 

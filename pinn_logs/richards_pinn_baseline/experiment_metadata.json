@@ -1,6 +1,6 @@
 {
   "experiment_name": "richards_pinn_baseline",
-  "start_time": "2025-09-23T19:13:38.666153",
+  "start_time": "2025-09-24T00:46:04.997788",
   "hyperparameters": {
     "h_hidden_dim": 64,
     "h_num_layers": 4,
@@ -8,7 +8,7 @@
     "zb_hidden_dim": 32,
     "zb_num_layers": 3,
     "n_epochs": 20000,
-    "learning_rate": 0.002,
+    "learning_rate": 0.0001,
     "weight_update_freq": 100,
     "weight_lr": 0.1,
     "ema_alpha": 0.9,
@@ -23,7 +23,7 @@
     "initial_ic_h_weight": 1.0,
     "initial_ic_zb_weight": 1.0,
     "cache_size": 10000,
-    "batch_size": 10000,
+    "batch_size": 500,
     "resample_freq": 500,
     "boundary_ratio": 0.7,
     "high_residual_ratio": 0.6,
