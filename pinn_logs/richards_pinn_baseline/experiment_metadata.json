@@ -1,6 +1,6 @@
 {
   "experiment_name": "richards_pinn_baseline",
-  "start_time": "2025-09-24T08:11:50.069348",
+  "start_time": "2025-09-24T18:52:38.285840",
   "hyperparameters": {
     "h_hidden_dim": 64,
     "h_num_layers": 4,
@@ -8,8 +8,8 @@
     "zb_hidden_dim": 32,
     "zb_num_layers": 3,
     "fourier_freqs": [],
-    "n_epochs": 20000,
-    "learning_rate": 0.0001,
+    "n_epochs": 40000,
+    "learning_rate": 0.001,
     "weight_update_freq": 100,
     "weight_lr": 0.1,
     "ema_alpha": 0.9,
@@ -30,7 +30,7 @@
     "high_residual_ratio": 0.6,
     "temperature": 1.0,
     "zb_initial": 0.5,
-    "t_max": 1296000.0,
+    "t_max": 86400.0,
     "Sy": 0.6,
     "zr": 0.5,
     "soil_params": {
