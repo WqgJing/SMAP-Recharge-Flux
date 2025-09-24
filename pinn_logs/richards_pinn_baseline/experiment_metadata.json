@@ -1,6 +1,6 @@
 {
   "experiment_name": "richards_pinn_baseline",
-  "start_time": "2025-09-24T01:47:27.106520",
+  "start_time": "2025-09-24T02:20:28.316080",
   "hyperparameters": {
     "h_hidden_dim": 64,
     "h_num_layers": 4,
