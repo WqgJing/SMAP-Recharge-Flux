@@ -1,18 +1,13 @@
 {
   "experiment_name": "richards_pinn_baseline",
-  "start_time": "2025-09-24T03:07:48.299452",
+  "start_time": "2025-09-24T08:11:50.069348",
   "hyperparameters": {
     "h_hidden_dim": 64,
     "h_num_layers": 4,
     "z_norm_val": 5.0,
     "zb_hidden_dim": 32,
     "zb_num_layers": 3,
-    "fourier_freqs": [
-      1,
-      4,
-      14,
-      244
-    ],
+    "fourier_freqs": [],
     "n_epochs": 20000,
     "learning_rate": 0.0001,
     "weight_update_freq": 100,
