@@ -6,6 +6,9 @@ from bs4 import BeautifulSoup
 import re
 
 
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+
 def list_csv_files(root_folder, out_csv="csv_file_list.csv"):
     """
     Recursively find all .csv files under root_folder.
@@ -59,7 +62,7 @@ def get_latlon_from_inventory(site_no):
 
 # Loop through all site numbers
 results = []
-for s in site_nos[:10]:  # <-- site_nos is your list of extracted site numbers
+for s in site_nos:  # <-- site_nos is your list of extracted site numbers
     lat, lon = get_latlon_from_inventory(s)
     results.append({"site_no": s, "latitude_dms": lat, "longitude_dms": lon})
 
@@ -71,8 +74,7 @@ coords_list = results
 
 # Save coords_list to CSV
 coords_df = pd.DataFrame(coords_list)
-coords_df.to_csv(
-    "/Users/jjason3/Downloads/Recharge project/Data/well_coordinates.csv", index=False
-)
+coords_df.to_csv(os.path.join(script_dir, "well_coordinates.csv"), index=False)
+
 
 print(df_coords.head())
