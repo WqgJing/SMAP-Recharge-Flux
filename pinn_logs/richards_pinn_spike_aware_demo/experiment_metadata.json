@@ -1,6 +1,6 @@
 {
   "experiment_name": "richards_pinn_spike_aware_demo",
-  "start_time": "2025-09-29T23:47:36.510664",
+  "start_time": "2025-09-30T01:29:50.494345",
   "hyperparameters": {
     "h_hidden_dim": 64,
     "h_num_layers": 4,

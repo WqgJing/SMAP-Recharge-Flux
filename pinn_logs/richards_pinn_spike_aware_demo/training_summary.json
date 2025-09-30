@@ -1,8 +1,8 @@
 {
   "experiment_name": "richards_pinn_spike_aware_demo",
-  "start_time": "2025-09-29T23:47:36.510664",
-  "end_time": "2025-09-29T23:49:26.709938",
-  "total_training_time_seconds": 110.19927382469177,
+  "start_time": "2025-09-30T01:29:50.494345",
+  "end_time": "2025-09-30T01:31:39.608429",
+  "total_training_time_seconds": 109.11408424377441,
   "total_epochs": 10000,
   "final_losses": {
     "total": 1.8975551938638091e-06,
@@ -31,7 +31,7 @@
     "ic_zb": 1.0
   },
   "training_statistics": {
-    "avg_epoch_time": 0.011010645723342895,
+    "avg_epoch_time": 0.010901036715507507,
     "min_total_loss": 1.0175437159531953e-09,
     "convergence_info": {
       "epochs_to_min_loss": 8351
