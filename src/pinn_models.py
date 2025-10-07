@@ -129,7 +129,11 @@ class RichardsPINN(nn.Module):
         
         # Compute dimensionless parameters
         t_max_tilde = t_max / normalizer.T
-        
+
+        # Store scaling parameters (needed for fine-tuning)
+        self.t_max_tilde = t_max_tilde
+        self.z_max_tilde = z_max_tilde
+
         # Initialize networks with dimensionless parameters
         self.h_net = PressureHeadNet(
             h_net_config["hidden_dim"], 

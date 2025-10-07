@@ -3,7 +3,7 @@ SMAP Recharge Flux PINN - Core modules
 """
 
 from .pinn_models import PressureHeadNet, WaterTableNet, RichardsPINN
-from .train_loop import train_pinn_pool_batch_autoweight
+from .train_loop import train_pinn_pool_batch_autoweight, finetune_pinn, load_pretrained_model
 from .normalization_helper import NormalizationHelper
 from .surf_flux import synth_surface_flux
 from .spike_detection import detect_spike_events
@@ -15,6 +15,8 @@ __all__ = [
     'WaterTableNet',
     'RichardsPINN',
     'train_pinn_pool_batch_autoweight',
+    'finetune_pinn',
+    'load_pretrained_model',
     'NormalizationHelper',
     'synth_surface_flux',
     'detect_spike_events',
