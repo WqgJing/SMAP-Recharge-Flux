@@ -3,14 +3,15 @@ from torch.optim import Adam
 from normalization_helper import NormalizationHelper
 from pinn_models import RichardsPINN
 from training_utils import (
-    SamplingHelpers, 
-    compute_losses, 
-    apply_weights_and_compute_gradients, 
+    SamplingHelpers,
+    compute_losses,
+    apply_weights_and_compute_gradients,
     apply_weights_fixed_mode,
     WeightManager,
     CachePoolManager,
     compute_grad_norm,
-    compute_total_grad_norm
+    compute_total_grad_norm,
+    compute_full_sample_loss
 )
 from training_logger import TrainingLogger
 from boundary_sampling import sample_boundary_points
@@ -168,10 +169,27 @@ def train_pinn_pool_batch_autoweight(
                 epoch, n_epochs, total_loss, weighted_losses, gradients, weights, cache_manager
             )
 
+        # Compute and record sample loss (over full dataset) every 500 epochs
+        if (epoch + 1) % 500 == 0 or epoch == 0:
+            sample_losses_dict = compute_full_sample_loss(
+                model, cache_manager, q0_times_t, t_min, z_max, device
+            )
+            logger.record_sample_losses(epoch, sample_losses_dict, weights)
+
+            # Print sample loss info
+            total_sample_loss = sum(weights[key] * sample_losses_dict[key] for key in sample_losses_dict)
+            print(f"\n  [Sample Loss at epoch {epoch+1}] Total={total_sample_loss:.3e}")
+            print(f"    PDE={sample_losses_dict['pde']:.3e}, Surf={sample_losses_dict['surf']:.3e}")
+            print(f"    WT(h)={sample_losses_dict['wt_head']:.3e}, WT(kin)={sample_losses_dict['wt_kin']:.3e}")
+            print(f"    IC(h)={sample_losses_dict['ic_h']:.3e}, IC(zb)={sample_losses_dict['ic_zb']:.3e}")
+
     # Print final summary
     final_grad_norm = gradients.get("total", 0.0)
     logger.print_final_summary(final_grad_norm, weights, cache_manager)
 
-    return model, logger.losses, logger.comps
+    # Return model, batch losses, and sample losses
+    # To plot sample losses, use: plot_training_losses(logger.losses, logger.comps,
+    #                                                  logger.sample_losses, logger.sample_comps, logger.sample_epochs)
+    return model, logger.losses, logger.comps, logger.sample_losses, logger.sample_comps, logger.sample_epochs
 
 
