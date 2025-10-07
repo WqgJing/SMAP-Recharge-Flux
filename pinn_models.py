@@ -176,27 +176,22 @@ class RichardsPINN(nn.Module):
         return h_tilde, zb_tilde
 
     def surface_flux_tilde(self, t_tilde):
-        """Prescribed dimensionless surface flux q̃0(t̃) - interpolated from input data"""
+        """Prescribed dimensionless surface flux q̃0(t̃) - interpolated from input data (GPU-optimized)"""
         t_flat = t_tilde.flatten()
-        q0_tilde_interp = torch.zeros_like(t_flat)
 
-        for i in range(len(t_flat)):
-            t_val = t_flat[i]
-            # Find surrounding points for interpolation
-            if t_val <= self.q0_times_tilde[0]:
-                q0_tilde_interp[i] = self.q0_values_tilde[0]
-            elif t_val >= self.q0_times_tilde[-1]:
-                q0_tilde_interp[i] = self.q0_values_tilde[-1]
-            else:
-                # Linear interpolation
-                idx = torch.searchsorted(self.q0_times_tilde, t_val)
-                if idx == 0:
-                    q0_tilde_interp[i] = self.q0_values_tilde[0]
-                else:
-                    t1, t2 = self.q0_times_tilde[idx - 1], self.q0_times_tilde[idx]
-                    q1, q2 = self.q0_values_tilde[idx - 1], self.q0_values_tilde[idx]
-                    alpha = (t_val - t1) / (t2 - t1)
-                    q0_tilde_interp[i] = q1 + alpha * (q2 - q1)
+        # Vectorized searchsorted for all points at once (GPU-efficient)
+        indices = torch.searchsorted(self.q0_times_tilde, t_flat)
+        indices = torch.clamp(indices, 1, len(self.q0_times_tilde) - 1)
+
+        # Get surrounding time and flux values (vectorized)
+        t1 = self.q0_times_tilde[indices - 1]
+        t2 = self.q0_times_tilde[indices]
+        q1 = self.q0_values_tilde[indices - 1]
+        q2 = self.q0_values_tilde[indices]
+
+        # Vectorized linear interpolation
+        alpha = (t_flat - t1) / (t2 - t1 + 1e-12)
+        q0_tilde_interp = q1 + alpha * (q2 - q1)
 
         return q0_tilde_interp.reshape_as(t_tilde)
 
