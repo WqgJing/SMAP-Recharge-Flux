@@ -41,7 +41,11 @@ def train_pinn_pool_batch_autoweight(
     n_events=3,
     batch_size_bc=100,
     device='cpu',
-    spike_events=None
+    spike_events=None,
+    # HPC GPU optimizations (backward compatible, default: OFF)
+    use_multi_gpu=True,  # Auto-detect and use DataParallel if multiple GPUs available
+    use_amp=False,  # Mixed precision training (fp16) - reduces memory, may affect numerics
+    grad_accumulation_steps=1,  # Gradient accumulation for larger effective batch size
 ):
     """
     Training with pool + small batch sampling approach.
@@ -70,6 +74,33 @@ def train_pinn_pool_batch_autoweight(
         z_max_tilde=1.0,  # ← Optional, for network scaling
         device=device,  # ← Add device parameter
     ).to(device)
+
+    # --- HPC GPU Optimizations ---
+    # Multi-GPU support (auto-detect)
+    n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    use_data_parallel = use_multi_gpu and n_gpus > 1
+
+    if use_data_parallel:
+        print(f"Multi-GPU mode: Using {n_gpus} GPUs with DataParallel")
+        model = torch.nn.DataParallel(model)
+        model_core = model.module  # Access underlying model for direct method calls
+    else:
+        model_core = model  # Single GPU or CPU
+
+    # Mixed precision training setup
+    scaler = None
+    if use_amp:
+        if not torch.cuda.is_available():
+            print("Warning: AMP requested but CUDA not available. Disabling AMP.")
+            use_amp = False
+        else:
+            scaler = torch.cuda.amp.GradScaler()
+            print("Mixed precision training (AMP) enabled")
+
+    # Gradient accumulation
+    if grad_accumulation_steps > 1:
+        print(f"Gradient accumulation: effective batch size = {batch_size * grad_accumulation_steps}")
+
     optimizer = Adam(model.parameters(), lr=learning_rate)
 
     # --- Initialize managers and helpers ---
@@ -96,6 +127,13 @@ def train_pinn_pool_batch_autoweight(
 
     # --- Print initial information ---
     print(f"Training for {n_epochs} epochs | lr={learning_rate}")
+    print(f"Device: {device} | GPUs available: {n_gpus}")
+    if use_data_parallel:
+        print(f"Multi-GPU: Enabled ({n_gpus} GPUs)")
+    if use_amp:
+        print(f"Mixed Precision (AMP): Enabled")
+    if grad_accumulation_steps > 1:
+        print(f"Gradient Accumulation: {grad_accumulation_steps} steps")
     print(f"Adaptive weighting: updating every {weight_update_freq} epochs")
     print(
         f"Pool + Batch: cache_size={cache_size}, batch_size={batch_size}, "
@@ -111,22 +149,28 @@ def train_pinn_pool_batch_autoweight(
     )
     print(f"Initial weights: {weight_manager.get_weights()}")
 
-    # --- Main training loop (UNCHANGED) ---
+    # --- Main training loop (GPU-optimized) ---
     for epoch in range(n_epochs):
-        optimizer.zero_grad()
+        # Gradient accumulation: only zero grad at start of accumulation cycle
+        if epoch % grad_accumulation_steps == 0:
+            optimizer.zero_grad()
 
-        # Update cache residuals and sampling probabilities
-        cache_manager.update_residuals(model, epoch, resample_freq)
+        # Update cache residuals and sampling probabilities (use model_core for direct method access)
+        cache_manager.update_residuals(model_core, epoch, resample_freq)
 
-        # Sample training points
-        z_col, t_col = cache_manager.sample_batch(model, epoch)
+        # Sample training points (use model_core for direct method access)
+        z_col, t_col = cache_manager.sample_batch(model_core, epoch)
         t_bc = sample_boundary_points(q0_times_t, spike_events, n_events, batch_size_bc, device)
         z_ic, t_ic = sampling.sample_initial_condition_points(
-            model, batch_size, t_min, z_max, device
+            model_core, batch_size, t_min, z_max, device
         )
 
-        # Compute losses
-        losses = compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic)
+        # Compute losses with optional mixed precision
+        if use_amp:
+            with torch.cuda.amp.autocast():
+                losses = compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic)
+        else:
+            losses = compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic)
 
         # Apply weights and compute gradients (conditionally)
         weights = weight_manager.get_weights()
@@ -139,19 +183,34 @@ def train_pinn_pool_batch_autoweight(
                 losses, weights, model
             )
 
-        # Backpropagation
-        total_loss.backward()
+        # Scale loss for gradient accumulation
+        total_loss = total_loss / grad_accumulation_steps
 
-        # Compute total gradient norm (only if not using fixed weights)
-        if not weight_manager.is_using_fixed_weights():
-            total_grad_norm = compute_total_grad_norm(model)
-            gradients["total"] = total_grad_norm
+        # Backpropagation with optional mixed precision
+        if use_amp:
+            scaler.scale(total_loss).backward()
         else:
-            # Skip expensive gradient norm computation in fixed weight mode
-            gradients["total"] = 0.0
+            total_loss.backward()
 
-        # Optimizer step
-        optimizer.step()
+        # Optimizer step (only at end of accumulation cycle)
+        if (epoch + 1) % grad_accumulation_steps == 0:
+            # Compute total gradient norm (only if not using fixed weights)
+            if not weight_manager.is_using_fixed_weights():
+                total_grad_norm = compute_total_grad_norm(model)
+                gradients["total"] = total_grad_norm
+            else:
+                # Skip expensive gradient norm computation in fixed weight mode
+                gradients["total"] = 0.0
+
+            # Optimizer step with optional gradient scaling
+            if use_amp:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+        else:
+            # Not at accumulation boundary, set dummy gradient norm
+            gradients["total"] = 0.0
 
         # Update weights periodically
         if (epoch + 1) % weight_update_freq == 0 and epoch > 0:
@@ -172,7 +231,7 @@ def train_pinn_pool_batch_autoweight(
         # Compute and record sample loss (over full dataset) every 500 epochs
         if (epoch + 1) % 500 == 0 or epoch == 0:
             sample_losses_dict = compute_full_sample_loss(
-                model, cache_manager, q0_times_t, t_min, z_max, device
+                model_core, cache_manager, q0_times_t, t_min, z_max, device
             )
             logger.record_sample_losses(epoch, sample_losses_dict, weights)
 
@@ -187,9 +246,9 @@ def train_pinn_pool_batch_autoweight(
     final_grad_norm = gradients.get("total", 0.0)
     logger.print_final_summary(final_grad_norm, weights, cache_manager)
 
-    # Return model, batch losses, and sample losses
+    # Return unwrapped model for backward compatibility (model_core is the original model)
     # To plot sample losses, use: plot_training_losses(logger.losses, logger.comps,
     #                                                  logger.sample_losses, logger.sample_comps, logger.sample_epochs)
-    return model, logger.losses, logger.comps, logger.sample_losses, logger.sample_comps, logger.sample_epochs
+    return model_core, logger.losses, logger.comps, logger.sample_losses, logger.sample_comps, logger.sample_epochs
 
 

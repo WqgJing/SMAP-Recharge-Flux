@@ -459,18 +459,22 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
     for i in range(0, cache_manager.cache_size, chunk_size):
         j = min(i + chunk_size, cache_manager.cache_size)
         u_chunk = cache_manager.u_cache[i:j].clone()
-        t_chunk = cache_manager.t_cache[i:j].clone().requires_grad_(True)
+        t_chunk = cache_manager.t_cache[i:j].clone()
 
         # Map u to z using predicted water table depth
-        with torch.no_grad():
-            zb_chunk = model.predict_water_table(t_chunk)
-        z_chunk = (-u_chunk * zb_chunk).requires_grad_(True)
+        # Note: predict_water_table uses no_grad internally, so zb_chunk has no gradient
+        zb_chunk = model.predict_water_table(t_chunk)
 
-        # Compute PDE residual
-        with torch.no_grad():
-            res_pde = model.pde_residual(z_chunk, t_chunk)
-            loss_accum["pde"] += (res_pde**2).sum().item()
-            n_pde_points += len(z_chunk)
+        # Create z_chunk and enable gradients for PDE residual computation
+        z_chunk = (-u_chunk * zb_chunk).detach().requires_grad_(True)
+        t_chunk_grad = t_chunk.detach().requires_grad_(True)
+
+        # Compute PDE residual (needs gradients enabled for physics derivatives)
+        res_pde = model.pde_residual(z_chunk, t_chunk_grad)
+
+        # Detach before accumulating to avoid building computation graph
+        loss_accum["pde"] += (res_pde**2).sum().detach().item()
+        n_pde_points += len(z_chunk)
 
     loss_accum["pde"] /= n_pde_points
 
@@ -480,19 +484,17 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
         j = min(i + batch_size_bc, len(q0_times_t))
         t_bc = q0_times_t[i:j]
 
-        with torch.no_grad():
-            # Surface flux BC
-            res_surf = model.surface_bc_residual(t_bc)
-            loss_accum["surf"] += (res_surf**2).sum().item()
+        # BC residuals need gradients for physics derivatives
+        res_surf = model.surface_bc_residual(t_bc)
+        loss_accum["surf"] += (res_surf**2).sum().detach().item()
 
-            # Water table BCs
-            res_wt_head = model.water_table_head_residual(t_bc)
-            loss_accum["wt_head"] += (res_wt_head**2).sum().item()
+        res_wt_head = model.water_table_head_residual(t_bc)
+        loss_accum["wt_head"] += (res_wt_head**2).sum().detach().item()
 
-            res_wt_kin = model.water_table_kinematic_residual(t_bc)
-            loss_accum["wt_kin"] += (res_wt_kin**2).sum().item()
+        res_wt_kin = model.water_table_kinematic_residual(t_bc)
+        loss_accum["wt_kin"] += (res_wt_kin**2).sum().detach().item()
 
-            n_bc_points += len(t_bc)
+        n_bc_points += len(t_bc)
 
     loss_accum["surf"] /= n_bc_points
     loss_accum["wt_head"] /= n_bc_points
@@ -505,10 +507,10 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
         model, ic_batch_size, t_min, z_max, device
     )
 
-    with torch.no_grad():
-        res_ic_h, res_ic_zb = model.initial_conditions_residual(z_ic, t_ic)
-        loss_accum["ic_h"] = (res_ic_h**2).mean().item()
-        loss_accum["ic_zb"] = (res_ic_zb**2).mean().item()
+    # IC residuals computation
+    res_ic_h, res_ic_zb = model.initial_conditions_residual(z_ic, t_ic)
+    loss_accum["ic_h"] = (res_ic_h**2).mean().detach().item()
+    loss_accum["ic_zb"] = (res_ic_zb**2).mean().detach().item()
 
     model.train()
 
