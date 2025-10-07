@@ -4,10 +4,20 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 venv/
+*.egg-info/
 
 # Jupyter
 .ipynb_checkpoints/
 
+# Training artifacts
+checkpoints/
+checkpoints_finetune/
+pinn_logs/
+logs/
+
+# Data (uncomment if you don't want to track data files)
+# data/
 
