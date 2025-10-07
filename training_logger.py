@@ -28,6 +28,18 @@ class TrainingLogger:
             "ic_zb": [],
             "total": [],
         }
+
+        # Sample loss storage (computed over full dataset)
+        self.sample_losses = []
+        self.sample_comps = {
+            "pde": [],
+            "surf": [],
+            "wt_head": [],
+            "wt_kin": [],
+            "ic_h": [],
+            "ic_zb": [],
+        }
+        self.sample_epochs = []  # Track which epochs sample losses were computed
         
         # File-based logging setup
         self.log_dir = log_dir
@@ -115,6 +127,19 @@ class TrainingLogger:
         """Record gradient norms (existing functionality)."""
         for key in grad_dict:
             self.grads[key].append(grad_dict[key])
+
+    def record_sample_losses(self, epoch, loss_dict, weights):
+        """Record sample losses computed over the full dataset."""
+        self.sample_epochs.append(epoch)
+
+        # Compute total weighted loss
+        total_loss = sum(weights[key] * loss_dict[key] for key in loss_dict)
+        self.sample_losses.append(total_loss)
+
+        # Record weighted components
+        for key in self.sample_comps:
+            weighted_loss = weights[key] * loss_dict[key]
+            self.sample_comps[key].append(weighted_loss)
 
     def record_weights(self, weights):
         """Record current weight values."""

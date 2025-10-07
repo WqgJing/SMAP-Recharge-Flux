@@ -422,3 +422,94 @@ def compute_total_grad_norm(model):
         if param.grad is not None:
             total_grad_norm += param.grad.norm(2).item() ** 2
     return total_grad_norm**0.5
+
+
+def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, device,
+                              batch_size_bc=100, chunk_size=1000):
+    """
+    Compute loss over all samples (entire dataset) for smooth loss tracking.
+
+    Args:
+        model: The PINN model
+        cache_manager: Cache pool manager containing all spatial-temporal points
+        q0_times_t: Boundary condition time points
+        t_min: Minimum time for initial conditions
+        z_max: Maximum z (surface) for initial conditions
+        device: Device to use
+        batch_size_bc: Batch size for boundary condition points
+        chunk_size: Chunk size for processing large datasets
+
+    Returns:
+        Dictionary containing total loss and loss components computed over full dataset
+    """
+    model.eval()
+
+    # Initialize accumulators for losses
+    loss_accum = {
+        "pde": 0.0,
+        "surf": 0.0,
+        "wt_head": 0.0,
+        "wt_kin": 0.0,
+        "ic_h": 0.0,
+        "ic_zb": 0.0,
+    }
+
+    # 1. Compute PDE loss over entire cache pool (in chunks to avoid memory issues)
+    n_pde_points = 0
+    for i in range(0, cache_manager.cache_size, chunk_size):
+        j = min(i + chunk_size, cache_manager.cache_size)
+        u_chunk = cache_manager.u_cache[i:j].clone()
+        t_chunk = cache_manager.t_cache[i:j].clone().requires_grad_(True)
+
+        # Map u to z using predicted water table depth
+        with torch.no_grad():
+            zb_chunk = model.predict_water_table(t_chunk)
+        z_chunk = (-u_chunk * zb_chunk).requires_grad_(True)
+
+        # Compute PDE residual
+        with torch.no_grad():
+            res_pde = model.pde_residual(z_chunk, t_chunk)
+            loss_accum["pde"] += (res_pde**2).sum().item()
+            n_pde_points += len(z_chunk)
+
+    loss_accum["pde"] /= n_pde_points
+
+    # 2. Compute boundary condition losses over all q0 time points
+    n_bc_points = 0
+    for i in range(0, len(q0_times_t), batch_size_bc):
+        j = min(i + batch_size_bc, len(q0_times_t))
+        t_bc = q0_times_t[i:j]
+
+        with torch.no_grad():
+            # Surface flux BC
+            res_surf = model.surface_bc_residual(t_bc)
+            loss_accum["surf"] += (res_surf**2).sum().item()
+
+            # Water table BCs
+            res_wt_head = model.water_table_head_residual(t_bc)
+            loss_accum["wt_head"] += (res_wt_head**2).sum().item()
+
+            res_wt_kin = model.water_table_kinematic_residual(t_bc)
+            loss_accum["wt_kin"] += (res_wt_kin**2).sum().item()
+
+            n_bc_points += len(t_bc)
+
+    loss_accum["surf"] /= n_bc_points
+    loss_accum["wt_head"] /= n_bc_points
+    loss_accum["wt_kin"] /= n_bc_points
+
+    # 3. Compute initial condition losses over a representative set of points
+    ic_batch_size = 200  # Use a reasonable number of IC points
+    sampling_helper = SamplingHelpers()
+    z_ic, t_ic = sampling_helper.sample_initial_condition_points(
+        model, ic_batch_size, t_min, z_max, device
+    )
+
+    with torch.no_grad():
+        res_ic_h, res_ic_zb = model.initial_conditions_residual(z_ic, t_ic)
+        loss_accum["ic_h"] = (res_ic_h**2).mean().item()
+        loss_accum["ic_zb"] = (res_ic_zb**2).mean().item()
+
+    model.train()
+
+    return loss_accum

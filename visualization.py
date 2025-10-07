@@ -173,23 +173,36 @@ def plot_comprehensive_results(model, q0_data, soil_params, n_t=200, n_z=100, de
     print(f"Max IC error: {np.max(np.abs(h_ic_modeled - h_ic_prescribed)):.6f} m")
 
 
-def plot_training_losses(losses_pool, comps_pool):
+def plot_training_losses(losses_pool, comps_pool, sample_losses=None, sample_comps=None, sample_epochs=None):
     """
     Plot training loss evolution with 6 subplots showing different loss components.
-    
+
     Args:
-        losses_pool: list or array of total weighted losses over epochs
+        losses_pool: list or array of total weighted losses over epochs (batch losses)
         comps_pool: dictionary containing loss components with keys:
                    'pde', 'surf', 'wt_head', 'ic_h'
+        sample_losses: optional list of total losses computed over full dataset
+        sample_comps: optional dictionary of loss components computed over full dataset
+        sample_epochs: optional list of epoch numbers where sample losses were computed
     """
 
-    
+
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    fig.suptitle('Pool+Batch Training - Weighted Loss Evolution', fontsize=16, fontweight='bold')
+    title = 'Training - Sample Loss Evolution' if sample_losses else 'Pool+Batch Training - Weighted Loss Evolution'
+    fig.suptitle(title, fontsize=16, fontweight='bold')
+
+    # Determine which losses to plot (prefer sample losses if available)
+    plot_sample = sample_losses is not None and sample_comps is not None and sample_epochs is not None
+    x_data = np.array(sample_epochs) if plot_sample else np.arange(len(losses_pool))
+    total_losses = sample_losses if plot_sample else losses_pool
+    loss_comps = sample_comps if plot_sample else comps_pool
 
     # Plot 1: Total Weighted Loss
     ax1 = axes[0, 0]
-    ax1.semilogy(losses_pool, 'r-', label='Total Weighted Loss', alpha=0.7)
+    if plot_sample:
+        ax1.semilogy(x_data, total_losses, 'b-o', label='Total Sample Loss', alpha=0.7, markersize=4)
+    else:
+        ax1.semilogy(x_data, total_losses, 'r-', label='Total Batch Loss', alpha=0.7)
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Total Weighted Loss')
     ax1.set_title('Total Weighted Loss Evolution')
@@ -198,7 +211,10 @@ def plot_training_losses(losses_pool, comps_pool):
 
     # Plot 2: PDE Weighted Loss
     ax2 = axes[0, 1]
-    ax2.semilogy(comps_pool['pde'], 'r-', label='PDE Weighted Loss', alpha=0.7)
+    if plot_sample:
+        ax2.semilogy(x_data, loss_comps['pde'], 'b-o', label='PDE Sample Loss', alpha=0.7, markersize=4)
+    else:
+        ax2.semilogy(x_data, loss_comps['pde'], 'r-', label='PDE Batch Loss', alpha=0.7)
     ax2.set_xlabel('Epoch')
     ax2.set_ylabel('PDE Weighted Loss')
     ax2.set_title('PDE Weighted Loss')
@@ -207,7 +223,10 @@ def plot_training_losses(losses_pool, comps_pool):
 
     # Plot 3: Surface BC Weighted Loss
     ax3 = axes[0, 2]
-    ax3.semilogy(comps_pool['surf'], 'r-', label='Surface BC Weighted Loss', alpha=0.7)
+    if plot_sample:
+        ax3.semilogy(x_data, loss_comps['surf'], 'b-o', label='Surface BC Sample Loss', alpha=0.7, markersize=4)
+    else:
+        ax3.semilogy(x_data, loss_comps['surf'], 'r-', label='Surface BC Batch Loss', alpha=0.7)
     ax3.set_xlabel('Epoch')
     ax3.set_ylabel('Surface BC Weighted Loss')
     ax3.set_title('Surface BC Weighted Loss')
@@ -216,7 +235,10 @@ def plot_training_losses(losses_pool, comps_pool):
 
     # Plot 4: Water Table Head Weighted Loss
     ax4 = axes[1, 0]
-    ax4.semilogy(comps_pool['wt_head'], 'r-', label='WT Head Weighted Loss', alpha=0.7)
+    if plot_sample:
+        ax4.semilogy(x_data, loss_comps['wt_head'], 'b-o', label='WT Head Sample Loss', alpha=0.7, markersize=4)
+    else:
+        ax4.semilogy(x_data, loss_comps['wt_head'], 'r-', label='WT Head Batch Loss', alpha=0.7)
     ax4.set_xlabel('Epoch')
     ax4.set_ylabel('WT Head Weighted Loss')
     ax4.set_title('Water Table Head Weighted Loss')
@@ -225,7 +247,10 @@ def plot_training_losses(losses_pool, comps_pool):
 
     # Plot 5: Initial Condition Weighted Loss
     ax5 = axes[1, 1]
-    ax5.semilogy(comps_pool['ic_h'], 'r-', label='IC Weighted Loss', alpha=0.7)
+    if plot_sample:
+        ax5.semilogy(x_data, loss_comps['ic_h'], 'b-o', label='IC Sample Loss', alpha=0.7, markersize=4)
+    else:
+        ax5.semilogy(x_data, loss_comps['ic_h'], 'r-', label='IC Batch Loss', alpha=0.7)
     ax5.set_xlabel('Epoch')
     ax5.set_ylabel('IC Weighted Loss')
     ax5.set_title('Initial Condition Weighted Loss')
@@ -236,17 +261,19 @@ def plot_training_losses(losses_pool, comps_pool):
     ax6 = axes[1, 2]
     # Create bar plot showing final weighted losses
     loss_names = ['Total', 'PDE', 'Surf BC', 'WT Head', 'IC']
-    pool_final = [losses_pool[-1], comps_pool['pde'][-1], comps_pool['surf'][-1], 
-                 comps_pool['wt_head'][-1], comps_pool['ic_h'][-1]]
+    pool_final = [total_losses[-1], loss_comps['pde'][-1], loss_comps['surf'][-1],
+                 loss_comps['wt_head'][-1], loss_comps['ic_h'][-1]]
 
-    x = np.arange(len(loss_names))
+    x_bar = np.arange(len(loss_names))
     width = 0.7
 
-    bars = ax6.bar(x, pool_final, width, label='Final Weighted Loss', alpha=0.7, color='red')
+    color = 'blue' if plot_sample else 'red'
+    label = 'Final Sample Loss' if plot_sample else 'Final Batch Loss'
+    bars = ax6.bar(x_bar, pool_final, width, label=label, alpha=0.7, color=color)
 
     ax6.set_ylabel('Final Weighted Loss Value')
     ax6.set_title('Final Weighted Loss Summary')
-    ax6.set_xticks(x)
+    ax6.set_xticks(x_bar)
     ax6.set_xticklabels(loss_names, rotation=45)
     ax6.legend()
     ax6.set_yscale('log')
