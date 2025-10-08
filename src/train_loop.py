@@ -15,6 +15,7 @@ from .training_utils import (
 )
 from .training_logger import TrainingLogger
 from .boundary_sampling import sample_boundary_points
+from .adaptive_boundary_sampling import adaptive_boundary_sampling
 import os
 import glob
 
@@ -44,6 +45,11 @@ def train_pinn_pool_batch_autoweight(
     batch_size_bc=100,
     device='cpu',
     spike_events=None,
+    # Adaptive boundary sampling parameters
+    spike_ratio=0.7,
+    interpolation_density=3,
+    neighborhood_expansion=2,
+    use_weighted_sampling=True,
     # HPC GPU optimizations (backward compatible, default: OFF)
     use_multi_gpu=True,  # Auto-detect and use DataParallel if multiple GPUs available
     use_amp=False,  # Mixed precision training (fp16) - reduces memory, may affect numerics
@@ -220,7 +226,13 @@ def train_pinn_pool_batch_autoweight(
 
         # Sample training points (use model_core for direct method access)
         z_col, t_col = cache_manager.sample_batch(model_core, epoch)
-        t_bc = sample_boundary_points(q0_times_t, spike_events, n_events, batch_size_bc, device)
+        t_bc = adaptive_boundary_sampling(
+            q0_times_t, spike_events, n_events, batch_size_bc, device,
+            spike_ratio=spike_ratio,
+            interpolation_density=interpolation_density,
+            neighborhood_expansion=neighborhood_expansion,
+            use_weighted_sampling=use_weighted_sampling
+        )
         z_ic, t_ic = sampling.sample_initial_condition_points(
             model_core, batch_size, t_min, z_max, device
         )
