@@ -14,8 +14,7 @@ from .training_utils import (
     compute_full_sample_loss
 )
 from .training_logger import TrainingLogger
-from .boundary_sampling import sample_boundary_points
-from .adaptive_boundary_sampling import adaptive_boundary_sampling
+from .gradient_based_sampling import gradient_based_sampling
 import os
 import glob
 
@@ -41,15 +40,15 @@ def train_pinn_pool_batch_autoweight(
     boundary_ratio=0.7,
     high_residual_ratio=0.6,
     temperature=1.0,
-    n_events=3,
     batch_size_bc=100,
     device='cpu',
-    spike_events=None,
-    # Adaptive boundary sampling parameters
-    spike_ratio=0.7,
-    interpolation_density=3,
-    neighborhood_expansion=2,
-    use_weighted_sampling=True,
+    # Gradient-based boundary sampling parameters (three-way sampling)
+    interp_ratio=0.80,           # Fraction from gradient-interpolated points
+    neighbor_ratio=0.05,         # Fraction from neighbors of high-gradient regions
+    baseline_ratio=0.15,         # Fraction from uniform baseline
+    gradient_neighbor_expansion=2,  # Neighbors around high-gradient intervals
+    gradient_threshold=0.7,      # Percentile for "high gradient" (0.7 = top 30%)
+    gradient_power=2.0,          # Gradient emphasis (>1 = more aggressive)
     # HPC GPU optimizations (backward compatible, default: OFF)
     use_multi_gpu=True,  # Auto-detect and use DataParallel if multiple GPUs available
     use_amp=False,  # Mixed precision training (fp16) - reduces memory, may affect numerics
@@ -66,6 +65,7 @@ def train_pinn_pool_batch_autoweight(
     
     # --- Derive time bounds from q0_data ---
     q0_times_t = torch.tensor(q0_data[0], dtype=torch.float32, device=device).view(-1, 1)
+    q0_values_t = torch.tensor(q0_data[1], dtype=torch.float32, device=device)  # For importance weighting
     t_min = float(q0_times_t.min().item())
     t_max = float(q0_times_t.max().item())
     z_max = 0.0  # surface at z = 0
@@ -226,12 +226,20 @@ def train_pinn_pool_batch_autoweight(
 
         # Sample training points (use model_core for direct method access)
         z_col, t_col = cache_manager.sample_batch(model_core, epoch)
-        t_bc = adaptive_boundary_sampling(
-            q0_times_t, spike_events, n_events, batch_size_bc, device,
-            spike_ratio=spike_ratio,
-            interpolation_density=interpolation_density,
-            neighborhood_expansion=neighborhood_expansion,
-            use_weighted_sampling=use_weighted_sampling
+
+        # Gradient-based boundary condition sampling (three-way: interp + neighbor + baseline)
+        t_bc, _ = gradient_based_sampling(
+            q0_times_t,
+            q0_values_t,
+            batch_size_bc,
+            device=device,
+            use_interpolation=True,
+            interp_ratio=interp_ratio,
+            neighbor_ratio=neighbor_ratio,
+            baseline_ratio=baseline_ratio,
+            neighbor_expansion=gradient_neighbor_expansion,
+            gradient_threshold=gradient_threshold,
+            power=gradient_power
         )
         z_ic, t_ic = sampling.sample_initial_condition_points(
             model_core, batch_size, t_min, z_max, device
@@ -492,8 +500,14 @@ def finetune_pinn(
     boundary_ratio=0.7,
     high_residual_ratio=0.6,
     temperature=1.0,
-    n_events=3,
     batch_size_bc=100,
+    # Gradient-based boundary sampling parameters
+    interp_ratio=0.80,
+    neighbor_ratio=0.05,
+    baseline_ratio=0.15,
+    gradient_neighbor_expansion=2,
+    gradient_threshold=0.7,
+    gradient_power=2.0,
     # Weight management (default: fixed weights)
     weight_update_freq=1e10,  # Very high = fixed weights
     weight_lr=0.1,
@@ -507,8 +521,6 @@ def finetune_pinn(
     checkpoint_dir='checkpoints_finetune',
     checkpoint_freq=None,
     keep_last_n_checkpoints=3,
-    # Spike events for new data
-    spike_events=None,
 ):
     """
     Fine-tune a pretrained PINN model on new boundary condition data.
@@ -748,7 +760,22 @@ def finetune_pinn(
         cache_manager.update_residuals(model_core, epoch, resample_freq)
 
         z_col, t_col = cache_manager.sample_batch(model_core, epoch)
-        t_bc = sample_boundary_points(q0_times_t, spike_events, n_events, batch_size_bc, device)
+
+        # Gradient-based boundary condition sampling
+        q0_values_t = torch.tensor(new_q0_data[1], dtype=torch.float32, device=device)
+        t_bc, _ = gradient_based_sampling(
+            q0_times_t,
+            q0_values_t,
+            batch_size_bc,
+            device=device,
+            use_interpolation=True,
+            interp_ratio=interp_ratio,
+            neighbor_ratio=neighbor_ratio,
+            baseline_ratio=baseline_ratio,
+            neighbor_expansion=gradient_neighbor_expansion,
+            gradient_threshold=gradient_threshold,
+            power=gradient_power
+        )
         z_ic, t_ic = sampling.sample_initial_condition_points(
             model_core, batch_size, t_min, 0.0, device
         )
