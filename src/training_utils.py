@@ -333,9 +333,26 @@ class CachePoolManager:
         self.cache_stats["max_residual"].append(self.cache_residuals.max().item())
         self.cache_stats["std_residual"].append(self.cache_residuals.std().item())
 
-        # Compute sampling probabilities
+        # Compute sampling probabilities with safety checks
         tau = self.temperature if self.temperature > 0 else 1.0
-        self.sampling_probs = torch.softmax(self.cache_residuals / (tau + 1e-12), dim=0)
+
+        # Check for invalid residuals
+        if torch.isnan(self.cache_residuals).any() or torch.isinf(self.cache_residuals).any():
+            print(f"Warning: Invalid residuals detected at epoch {epoch}, using uniform probabilities")
+            self.sampling_probs = torch.ones(self.cache_size, device=self.device) / self.cache_size
+        elif self.cache_residuals.abs().max() < 1e-12:
+            # All residuals are essentially zero - use uniform sampling
+            self.sampling_probs = torch.ones(self.cache_size, device=self.device) / self.cache_size
+        else:
+            # Clamp residuals to prevent overflow in softmax
+            residuals_clamped = torch.clamp(self.cache_residuals, min=0.0, max=1e10)
+            scaled_residuals = residuals_clamped / (tau + 1e-12)
+            self.sampling_probs = torch.softmax(scaled_residuals, dim=0)
+
+            # Final safety check
+            if torch.isnan(self.sampling_probs).any() or torch.isinf(self.sampling_probs).any():
+                print(f"Warning: Invalid probabilities after softmax at epoch {epoch}, using uniform")
+                self.sampling_probs = torch.ones(self.cache_size, device=self.device) / self.cache_size
         
         # Optionally refresh part of the cache pool
         if epoch > 0 and epoch % (resample_freq * 5) == 0:
