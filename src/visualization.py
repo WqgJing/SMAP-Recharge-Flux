@@ -118,7 +118,8 @@ def plot_comprehensive_results(model, q0_data, soil_params, n_t=200, n_z=100, de
     h_surf_grad_tilde, _ = model(z_surf_tilde, t_surf_tilde)
     K_surf_tilde = model.normalizer.K_tilde(h_surf_grad_tilde)
     dh_dz_surf_tilde = torch.autograd.grad(h_surf_grad_tilde.sum(), z_surf_tilde, create_graph=True)[0]
-    q_surf_tilde = -K_surf_tilde * (dh_dz_surf_tilde + 1.0)
+    scale = model.normalizer.head_to_length_ratio
+    q_surf_tilde = -K_surf_tilde * (scale * dh_dz_surf_tilde + 1.0)
     
     # Denormalize flux
     q_surf_simulated = model.normalizer.denormalize_q(q_surf_tilde).detach().cpu().numpy().flatten()
