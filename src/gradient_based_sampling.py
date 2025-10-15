@@ -113,7 +113,7 @@ def gradient_based_sampling(
 
     all_samples = []
 
-    # ===== PART 1: Gradient-Interpolated Samples =====
+    # ===== PART 1: Gradient-Interpolated Samples (SPIKE-FOCUSED) =====
     if use_interpolation and n_interp_samples > 0:
         interpolated_times = []
         interval_weights = []  # Track which intervals contribute samples
@@ -121,30 +121,45 @@ def gradient_based_sampling(
         # For each interval between adjacent data points
         gradient_magnitudes = torch.abs(gradients)
 
-        for i in range(len(times_flat) - 1):
-            t_start = times_flat[i].item()
-            t_end = times_flat[i + 1].item()
-            grad_mag = gradient_magnitudes[i].item()
+        # Calculate threshold: only intervals above this percentile get interpolated
+        high_grad_threshold_val = torch.quantile(gradient_magnitudes, gradient_threshold)
 
-            # Number of interpolated points proportional to gradient magnitude
-            # Scale so max gradient gets ~20 points, min gets ~1
-            max_grad = gradient_magnitudes.max().item()
-            min_interp = 1
-            max_interp = 20
+        # Filter to only high-gradient intervals
+        high_grad_mask = gradient_magnitudes >= high_grad_threshold_val
+        high_grad_indices = torch.where(high_grad_mask)[0]
 
-            if max_grad > 0:
-                n_interp = int(min_interp + (max_interp - min_interp) * (grad_mag / max_grad))
-            else:
-                n_interp = min_interp
+        if len(high_grad_indices) > 0:
+            # Get only the high-gradient magnitudes for relative scaling
+            high_grad_mags = gradient_magnitudes[high_grad_indices]
+            max_grad = high_grad_mags.max().item()
+            min_grad = high_grad_mags.min().item()
 
-            # Create interpolated points in this interval
-            if n_interp > 0:
-                interp_times = torch.linspace(t_start, t_end, n_interp + 2, device=device)[1:-1]
-                interpolated_times.append(interp_times)
+            for idx in high_grad_indices:
+                i = idx.item()
+                t_start = times_flat[i].item()
+                t_end = times_flat[i + 1].item()
+                grad_mag = gradient_magnitudes[i].item()
 
-                # Weight for this interval (for sampling)
-                interval_weight = torch.ones(len(interp_times), device=device) * grad_mag
-                interval_weights.append(interval_weight)
+                # Number of interpolated points proportional to gradient magnitude
+                # ONLY among high-gradient intervals (baseline excluded entirely)
+                min_interp = 2   # Minimum points for qualifying high-gradient intervals
+                max_interp = 50  # Maximum points for highest gradient intervals
+
+                if max_grad > min_grad:
+                    # Scale within high-gradient range only
+                    normalized_grad = (grad_mag - min_grad) / (max_grad - min_grad)
+                    n_interp = int(min_interp + (max_interp - min_interp) * normalized_grad)
+                else:
+                    n_interp = min_interp
+
+                # Create interpolated points in this high-gradient interval
+                if n_interp > 0:
+                    interp_times = torch.linspace(t_start, t_end, n_interp + 2, device=device)[1:-1]
+                    interpolated_times.append(interp_times)
+
+                    # Weight for this interval (use power to further emphasize extremes)
+                    interval_weight = torch.ones(len(interp_times), device=device) * (grad_mag ** power)
+                    interval_weights.append(interval_weight)
 
         # Combine all interpolated points
         if len(interpolated_times) > 0:

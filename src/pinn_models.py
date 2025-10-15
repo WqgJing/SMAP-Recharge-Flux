@@ -6,18 +6,22 @@ import torch.nn.functional as F
 class PressureHeadNet(nn.Module):
     """Neural network for dimensionless pressure head h̃(z̃,t̃)"""
 
-    def __init__(self, hidden_dim, num_layers, t_max_tilde, z_max_tilde=1.0):
+    def __init__(self, hidden_dim, num_layers, t_ref_tilde=None, z_max_tilde=1.0):
         """
         Args:
             hidden_dim: Number of hidden units
             num_layers: Number of hidden layers
-            t_max_tilde: Maximum dimensionless time for scaling (t_max / T)
+            t_ref_tilde: Fixed reference time for scaling (default: 15 days / T)
             z_max_tilde: Maximum expected dimensionless depth for scaling (typically 1.0)
         """
         super().__init__()
 
+        # Use fixed reference time of 15 days if not specified
+        if t_ref_tilde is None:
+            t_ref_tilde = 15.0 * 86400  # 15 days in seconds, will be normalized by T
+
         # Store dimensionless normalization parameters for NN input scaling
-        self.t_max_tilde = t_max_tilde
+        self.t_ref_tilde = t_ref_tilde
         self.z_max_tilde = z_max_tilde
 
         layers = []
@@ -36,18 +40,18 @@ class PressureHeadNet(nn.Module):
         """
         Args:
             z_tilde: Dimensionless spatial coordinate (typically in [-1, 0])
-            t_tilde: Dimensionless time (typically in [0, t_max_tilde])
-        
+            t_tilde: Dimensionless time (can exceed t_ref_tilde during extrapolation)
+
         Returns:
             h_tilde: Dimensionless pressure head (O(1) values)
         """
-        # Scale inputs to [0, 1] range for better NN training
-        t_scaled = t_tilde / self.t_max_tilde  # [0, t_max_tilde] -> [0, 1]
+        # Scale inputs using FIXED reference time (duration-independent)
+        t_scaled = t_tilde / self.t_ref_tilde  # [0, t_ref_tilde] -> [0, 1] (can go beyond [0,1])
         z_scaled = (z_tilde + self.z_max_tilde) / self.z_max_tilde  # [-z_max_tilde, 0] -> [0, 1]
-        
+
         inputs = torch.cat([z_scaled, t_scaled], dim=1)
         h_tilde = self.net(inputs)
-        
+
         # Output is already dimensionless, no additional scaling needed
         return h_tilde
 
@@ -55,17 +59,21 @@ class PressureHeadNet(nn.Module):
 class WaterTableNet(nn.Module):
     """Neural network for dimensionless water table depth z̃_b(t̃) with z̃_b > 0"""
 
-    def __init__(self, hidden_dim, num_layers, t_max_tilde):
+    def __init__(self, hidden_dim, num_layers, t_ref_tilde=None):
         """
         Args:
             hidden_dim: Number of hidden units
             num_layers: Number of hidden layers
-            t_max_tilde: Maximum dimensionless time for scaling (t_max / T)
+            t_ref_tilde: Fixed reference time for scaling (default: 15 days / T)
         """
         super().__init__()
 
+        # Use fixed reference time of 15 days if not specified
+        if t_ref_tilde is None:
+            t_ref_tilde = 15.0 * 86400  # 15 days in seconds, will be normalized by T
+
         # Store dimensionless time normalization parameter
-        self.t_max_tilde = t_max_tilde
+        self.t_ref_tilde = t_ref_tilde
 
         layers = [nn.Linear(1, hidden_dim), nn.Tanh()]
         for _ in range(num_layers - 1):
@@ -76,17 +84,17 @@ class WaterTableNet(nn.Module):
     def forward(self, t_tilde):
         """
         Args:
-            t_tilde: Dimensionless time (typically in [0, t_max_tilde])
-        
+            t_tilde: Dimensionless time (can exceed t_ref_tilde during extrapolation)
+
         Returns:
             zb_tilde: Dimensionless water table depth (O(1) values, > 0)
         """
-        # Scale time input to [0, 1] for better NN training
-        t_scaled = t_tilde / self.t_max_tilde
-        
+        # Scale time input using FIXED reference time (duration-independent)
+        t_scaled = t_tilde / self.t_ref_tilde  # [0, t_ref_tilde] -> [0, 1] (can go beyond [0,1])
+
         raw = self.net(t_scaled)
         zb_tilde = F.softplus(raw)  # Ensures zb_tilde > 0 smoothly
-        
+
         # Output is already dimensionless, no additional scaling needed
         return zb_tilde
 
@@ -106,6 +114,7 @@ class RichardsPINN(nn.Module):
         zb_initial=1.5,
         t_max=86400,
         z_max_tilde=1.0,
+        t_ref_days=15.0,
         device='cpu'
     ):
         """
@@ -120,31 +129,33 @@ class RichardsPINN(nn.Module):
             zb_initial: Initial water table depth (dimensional) [m]
             t_max: Maximum time (dimensional) [s]
             z_max_tilde: Max dimensionless depth for network scaling
+            t_ref_days: Fixed reference time in days (default: 15 days)
             device: Device for computation
         """
         super().__init__()
-        
+
         # Store normalizer
         self.normalizer = normalizer
-        
-        # Compute dimensionless parameters
-        t_max_tilde = t_max / normalizer.T
+
+        # Compute fixed reference time in dimensionless units
+        t_ref_dim = t_ref_days * 86400  # Convert days to seconds
+        t_ref_tilde = t_ref_dim / normalizer.T
 
         # Store scaling parameters (needed for fine-tuning)
-        self.t_max_tilde = t_max_tilde
+        self.t_ref_tilde = t_ref_tilde
         self.z_max_tilde = z_max_tilde
 
-        # Initialize networks with dimensionless parameters
+        # Initialize networks with FIXED reference time (duration-independent)
         self.h_net = PressureHeadNet(
-            h_net_config["hidden_dim"], 
-            h_net_config["num_layers"], 
-            t_max_tilde=t_max_tilde,
+            h_net_config["hidden_dim"],
+            h_net_config["num_layers"],
+            t_ref_tilde=t_ref_tilde,
             z_max_tilde=z_max_tilde
         )
         self.zb_net = WaterTableNet(
-            zb_net_config["hidden_dim"], 
-            zb_net_config["num_layers"], 
-            t_max_tilde=t_max_tilde
+            zb_net_config["hidden_dim"],
+            zb_net_config["num_layers"],
+            t_ref_tilde=t_ref_tilde
         )
         
         # Store dimensionless parameters
