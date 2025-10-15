@@ -26,7 +26,7 @@ class NormalizationHelper:
         
         # Characteristic scales
         self.L = L  # Length scale [m]
-        self.H_star = L /20 # Head scale (H_* = L) [m]
+        self.H_star = L / 20  # Head scale (H_* = L/20 for numerical conditioning) [m]
         self.K_star = self.Ks  # Conductivity scale [m/s]
         self.Q_star = self.Ks  # Flux scale [m/s]
         self.theta_star = self.theta_s - self.theta_r  # Water content span [-]
@@ -35,9 +35,12 @@ class NormalizationHelper:
         self.T = self.theta_star * self.L / self.K_star  # [s]
         
         # Dimensionless parameters
-        self.alpha_tilde = self.alpha * self.H_star # α̃ = α × L [-]
+        self.alpha_tilde = self.alpha * self.H_star  # α̃ = α × H_* [-]
         self.S_max_tilde = S_max * self.L / self.K_star if S_max > 0 else 0.0  # S̃_max [-]
-        
+
+        # Scaling factor for head gradients when H_* ≠ L
+        self.head_to_length_ratio = self.H_star / self.L  # H_*/L [-]
+
         # Small constant for numerical stability
         self._tiny = 1e-12
         
@@ -70,7 +73,7 @@ class NormalizationHelper:
         return t / self.T
     
     def normalize_h(self, h):
-        """h̃ = h / L"""
+        """h̃ = h / H_*"""
         return h / self.H_star
     
     def normalize_q(self, q):
@@ -100,7 +103,7 @@ class NormalizationHelper:
         return t_tilde * self.T
     
     def denormalize_h(self, h_tilde):
-        """h = h̃ × L"""
+        """h = h̃ × H_*"""
         return h_tilde * self.H_star
     
     def denormalize_q(self, q_tilde):

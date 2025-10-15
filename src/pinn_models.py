@@ -231,9 +231,10 @@ class RichardsPINN(nn.Module):
         
         # Dimensionless conductivity
         K_tilde = self.normalizer.K_tilde(h_tilde)
-        
-        # Dimensionless flux: q̃ = -K̃(∂h̃/∂z̃ + 1)
-        q_tilde = -K_tilde * (dh_dz_tilde + 1.0)
+
+        # Dimensionless flux: q̃ = -K̃((H_*/L)∂h̃/∂z̃ + 1)
+        scale = self.normalizer.head_to_length_ratio
+        q_tilde = -K_tilde * (scale * dh_dz_tilde + 1.0)
         
         # ∂q̃/∂z̃
         dq_dz_tilde = torch.autograd.grad(q_tilde.sum(), z_tilde, create_graph=True)[0]
@@ -283,7 +284,8 @@ class RichardsPINN(nn.Module):
         h0_tilde, _ = self(z0_tilde, t_tilde)
         K0_tilde = self.normalizer.K_tilde(h0_tilde)
         dh_dz_0_tilde = torch.autograd.grad(h0_tilde.sum(), z0_tilde, create_graph=True)[0]
-        q_surf_tilde = -K0_tilde * (dh_dz_0_tilde + 1.0)
+        scale = self.normalizer.head_to_length_ratio
+        q_surf_tilde = -K0_tilde * (scale * dh_dz_0_tilde + 1.0)
         q0_tilde = self.surface_flux_tilde(t_tilde)
         
         return q_surf_tilde - q0_tilde
@@ -328,8 +330,9 @@ class RichardsPINN(nn.Module):
         h_wt_tilde, _ = self(z_wt_tilde, t_tilde)
         K_wt_tilde = self.normalizer.K_tilde(h_wt_tilde)
         dh_dz_wt_tilde = torch.autograd.grad(h_wt_tilde.sum(), z_wt_tilde, create_graph=True)[0]
-        q_wt_tilde = -K_wt_tilde * (dh_dz_wt_tilde + 1.0)
-        
+        scale = self.normalizer.head_to_length_ratio
+        q_wt_tilde = -K_wt_tilde * (scale * dh_dz_wt_tilde + 1.0)
+
         return dzb_dt_tilde - q_wt_tilde / self.Sy_tilde
 
     def initial_conditions_residual(self, z, t0):
@@ -349,10 +352,12 @@ class RichardsPINN(nn.Module):
         
         # Compute in dimensionless space
         h_tilde, zb_tilde = self(z_tilde, t0_tilde)
-        
+
         # Hydrostatic initial condition (dimensionless)
-        h_ic_tilde = (-zb_tilde - z_tilde )
-        
+        # h_ic = -zb - z (physical), so h_ic_tilde = h_ic/H_* = -(zb + z)/H_*
+        # Since z_tilde = z/L and zb_tilde = zb/L, we need: h_ic_tilde = -(zb_tilde + z_tilde) * (L/H_*)
+        h_ic_tilde = (-zb_tilde - z_tilde) * (self.normalizer.L / self.normalizer.H_star)
+
         # Initial water table depth (dimensionless)
         zb_ic_tilde = torch.tensor(self.zb_initial_tilde, device=z_tilde.device).expand_as(zb_tilde)
         
