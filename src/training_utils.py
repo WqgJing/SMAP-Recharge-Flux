@@ -43,7 +43,7 @@ def compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic):
     res_ic_h, res_ic_zb = model.initial_conditions_residual(z_ic, t_ic)
     loss_ic_h = (res_ic_h**2).mean()
     loss_ic_zb = (res_ic_zb**2).mean()
-    
+
     return {
         "pde": loss_pde,
         "surf": loss_surf,

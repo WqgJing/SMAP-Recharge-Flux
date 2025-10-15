@@ -339,7 +339,7 @@ def train_pinn_pool_batch_autoweight(
                 },
                 # Network scaling parameters (critical for fine-tuning)
                 'network_scaling': {
-                    't_max_tilde': model_core.t_max_tilde,
+                    't_ref_tilde': model_core.t_ref_tilde,
                     'z_max_tilde': model_core.z_max_tilde,
                 },
                 'rng_state': torch.get_rng_state(),
@@ -424,7 +424,7 @@ def train_pinn_pool_batch_autoweight(
             },
             # Network scaling parameters (critical for fine-tuning)
             'network_scaling': {
-                't_max_tilde': model_core.t_max_tilde,
+                't_ref_tilde': model_core.t_ref_tilde,
                 'z_max_tilde': model_core.z_max_tilde,
             },
             'rng_state': torch.get_rng_state(),
@@ -454,7 +454,7 @@ def load_pretrained_model(checkpoint_path, device='cpu'):
     Returns:
         Tuple of (model, checkpoint_dict) where checkpoint_dict contains:
             - normalization_params: soil_params, L, S_max, Sy, zr
-            - network_scaling: t_max_tilde, z_max_tilde
+            - network_scaling: t_ref_tilde, z_max_tilde
             - h_net_config, zb_net_config (must be same as training)
 
     Example:
@@ -478,8 +478,15 @@ def load_pretrained_model(checkpoint_path, device='cpu'):
     print(f"  Trained for {checkpoint['epoch']+1} epochs")
     print(f"  Normalization params: L={checkpoint['normalization_params']['L']:.2f}, "
           f"S_max={checkpoint['normalization_params']['S_max']:.2e}")
-    print(f"  Network scaling: t_max_tilde={checkpoint['network_scaling']['t_max_tilde']:.2f}, "
-          f"z_max_tilde={checkpoint['network_scaling']['z_max_tilde']:.2f}")
+
+    # Support both old and new checkpoint formats
+    scaling_info = checkpoint['network_scaling']
+    if 't_ref_tilde' in scaling_info:
+        print(f"  Network scaling: t_ref_tilde={scaling_info['t_ref_tilde']:.2f}, "
+              f"z_max_tilde={scaling_info['z_max_tilde']:.2f}")
+    elif 't_max_tilde' in scaling_info:
+        print(f"  Network scaling: t_max_tilde={scaling_info['t_max_tilde']:.2f} (legacy), "
+              f"z_max_tilde={scaling_info['z_max_tilde']:.2f}")
 
     return checkpoint
 
@@ -525,13 +532,12 @@ def finetune_pinn(
     """
     Fine-tune a pretrained PINN model on new boundary condition data.
 
-    IMPORTANT ASSUMPTION: New data has the same time duration as training data.
-    This allows us to preserve t_max_tilde from the base model.
+    Works with any time duration - uses fixed reference time from base model.
 
     Args:
         checkpoint_path: Path to base model checkpoint (.pt file)
         new_q0_data: NEW boundary condition data, tuple of (times, fluxes)
-                     MUST have same time duration as original training data
+                     Can have different time duration than original training data
         zb_initial: Initial water table depth for new scenario (if None, use from checkpoint)
         h_net_config: Network config (if None, must be same as training)
         zb_net_config: Network config (if None, must be same as training)
@@ -575,30 +581,28 @@ def finetune_pinn(
 
     # Extract network scaling (MUST preserve these!)
     network_scaling = checkpoint['network_scaling']
-    t_max_tilde_base = network_scaling['t_max_tilde']
+
+    # Support both old (t_max_tilde) and new (t_ref_tilde) checkpoint formats
+    if 't_ref_tilde' in network_scaling:
+        t_ref_tilde_base = network_scaling['t_ref_tilde']
+    elif 't_max_tilde' in network_scaling:
+        # Legacy checkpoint - convert to fixed reference
+        print(f"WARNING: Old checkpoint format detected (using t_max_tilde)")
+        print(f"  Converting to fixed reference time of 15 days...")
+        normalizer = NormalizationHelper(soil_params, L=L, S_max=S_max)
+        t_ref_tilde_base = (15.0 * 86400) / normalizer.T
+    else:
+        raise ValueError("Checkpoint missing both 't_ref_tilde' and 't_max_tilde'")
+
     z_max_tilde = network_scaling['z_max_tilde']
 
-    # Validate new data time duration matches base training
-    # ASSUMPTION: Same time duration allows preserving t_max_tilde
+    # Get new data time range
     new_t_min = min(new_q0_data[0])
     new_t_max = max(new_q0_data[0])
     new_duration = new_t_max - new_t_min
 
-    # Compute what t_max_tilde would be for new data
+    # Create normalizer (same as base)
     normalizer = NormalizationHelper(soil_params, L=L, S_max=S_max)
-    new_t_max_tilde = new_t_max / normalizer.T
-
-    # Check if durations match (within 1% tolerance)
-    if abs(new_t_max_tilde - t_max_tilde_base) / t_max_tilde_base > 0.01:
-        print(f"\nWARNING: Time duration mismatch detected!")
-        print(f"  Base t_max_tilde: {t_max_tilde_base:.4f}")
-        print(f"  New t_max_tilde:  {new_t_max_tilde:.4f}")
-        print(f"  Relative diff:    {abs(new_t_max_tilde - t_max_tilde_base) / t_max_tilde_base * 100:.2f}%")
-        print(f"  This may affect network input interpretation!")
-        print(f"  Consider adjusting new data time range to match base duration.\n")
-
-    # Use base t_max_tilde to preserve network input scaling
-    t_max_for_model = t_max_tilde_base * normalizer.T
 
     print("\n" + "="*70)
     print("Fine-Tuning Configuration")
@@ -611,11 +615,12 @@ def finetune_pinn(
     print(f"  L={L:.2f} m, S_max={S_max:.2e} 1/s")
     print(f"  Sy={Sy}, zr={zr:.2f} m")
     print(f"\nPreserved network scaling:")
-    print(f"  t_max_tilde={t_max_tilde_base:.4f} (from base model)")
+    print(f"  t_ref_tilde={t_ref_tilde_base:.4f} (FIXED reference time from base model)")
+    print(f"  t_ref_days={t_ref_tilde_base * normalizer.T / 86400:.2f} days")
     print(f"  z_max_tilde={z_max_tilde:.4f}")
     print(f"\nNew boundary condition data:")
     print(f"  Time range: [{new_t_min:.1f}, {new_t_max:.1f}] s")
-    print(f"  Duration: {new_duration/86400:.2f} days")
+    print(f"  Duration: {new_duration/86400:.2f} days (can differ from training!)")
     print(f"  {len(new_q0_data[0])} data points")
     print(f"\nFine-tuning hyperparameters:")
     print(f"  n_epochs={n_epochs} (vs {checkpoint.get('training_config', {}).get('n_epochs', 'N/A')} base)")
@@ -646,6 +651,9 @@ def finetune_pinn(
             raise ValueError("zb_initial not provided and not found in checkpoint")
 
     # Create model with SAME normalization as base
+    # Convert t_ref_tilde back to dimensional for model initialization
+    t_ref_days = t_ref_tilde_base * normalizer.T / 86400
+
     model = RichardsPINN(
         soil_params=soil_params,
         q0_data=new_q0_data,  # NEW boundary conditions
@@ -655,14 +663,24 @@ def finetune_pinn(
         zb_net_config=zb_net_config,
         normalizer=normalizer,  # Same normalizer as base
         zb_initial=zb_initial,
-        t_max=t_max_for_model,  # Use base t_max to preserve scaling
+        t_max=new_t_max,  # Use NEW data's t_max (doesn't affect network scaling anymore)
         z_max_tilde=z_max_tilde,  # Preserve from base
+        t_ref_days=t_ref_days,  # FIXED reference time from base model
         device=device,
     ).to(device)
 
     # Load pretrained weights
     model.load_state_dict(checkpoint['model_state_dict'])
     print(f"Loaded pretrained weights from base model")
+
+    # CRITICAL: Update q0 data to NEW boundary conditions
+    # load_state_dict() overwrites the q0 buffers with OLD training data
+    # We must manually restore the NEW q0 data after loading weights
+    model.q0_times_dim = torch.tensor(new_q0_data[0], dtype=torch.float32, device=device)
+    model.q0_values_dim = torch.tensor(new_q0_data[1], dtype=torch.float32, device=device)
+    model.q0_times_tilde = normalizer.normalize_t(model.q0_times_dim)
+    model.q0_values_tilde = normalizer.normalize_q(model.q0_values_dim)
+    print(f"Updated boundary condition data to NEW q0 (overriding checkpoint data)")
 
     # Multi-GPU setup (same as base training)
     n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
@@ -858,7 +876,7 @@ def finetune_pinn(
                     'zr': zr,
                 },
                 'network_scaling': {
-                    't_max_tilde': model_core.t_max_tilde,
+                    't_ref_tilde': model_core.t_ref_tilde,
                     'z_max_tilde': model_core.z_max_tilde,
                 },
                 'base_checkpoint': checkpoint_path,  # Track lineage
@@ -936,7 +954,7 @@ def finetune_pinn(
                 'zr': zr,
             },
             'network_scaling': {
-                't_max_tilde': model_core.t_max_tilde,
+                't_ref_tilde': model_core.t_ref_tilde,
                 'z_max_tilde': model_core.z_max_tilde,
             },
             'base_checkpoint': checkpoint_path,  # Track lineage
