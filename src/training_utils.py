@@ -126,12 +126,12 @@ class WeightManager:
             }
         else:
             base = {
-                "pde": 10 if use_initial_scales else 1.0,
-                "surf": 50 if use_initial_scales else 1.0,
-                "wt_head": 1.0,
-                "wt_kin": 1.0,
-                "ic_h": 1.0,
-                "ic_zb": 1.0,
+                "pde": 0.01 if use_initial_scales else 1.0,
+                "surf": 10 if use_initial_scales else 1.0,
+                "wt_head": 1,
+                "wt_kin": 1,
+                "ic_h": 1,
+                "ic_zb": 1,
             }
         self.weights = {k: float(v) for k, v in base.items()}
         self.weight_history = {k: [self.weights[k]] for k in self.weights}
