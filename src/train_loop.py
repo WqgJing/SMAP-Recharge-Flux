@@ -8,6 +8,7 @@ from .training_utils import (
     apply_weights_and_compute_gradients,
     apply_weights_fixed_mode,
     WeightManager,
+    StagedTrainingScheduler,
     CachePoolManager,
     compute_grad_norm,
     compute_total_grad_norm,
@@ -58,6 +59,12 @@ def train_pinn_pool_batch_autoweight(
     checkpoint_freq=None,  # Save checkpoint every N epochs (None = no checkpointing)
     resume_from_checkpoint=None,  # Path to checkpoint file to resume from
     keep_last_n_checkpoints=3,  # Keep only last N checkpoints (None = keep all)
+    # Staged training parameters (for BC-PDE conflict resolution)
+    use_staged_training=False,  # Enable 3-phase staged training
+    staged_phase1_end=0.20,  # Phase 1 ends at 20% of epochs
+    staged_phase2_end=0.50,  # Phase 2 ends at 50% of epochs
+    staged_enable_adaptive_phase3=True,  # Enable adaptive weights in Phase 3
+    staged_bc_monitoring=True,  # Monitor BC loss and pause PDE increase if needed
 ):
     """
     Training with pool + small batch sampling approach.
@@ -117,12 +124,33 @@ def train_pinn_pool_batch_autoweight(
     optimizer = Adam(model.parameters(), lr=learning_rate)
 
     # --- Initialize managers and helpers ---
+    # Create staged training scheduler if requested
+    staged_scheduler = None
+    if use_staged_training:
+        print(f"\n{'='*70}")
+        print("STAGED TRAINING ENABLED")
+        print(f"{'='*70}")
+        staged_scheduler = StagedTrainingScheduler(
+            n_epochs=n_epochs,
+            phase1_end=staged_phase1_end,
+            phase2_end=staged_phase2_end,
+            enable_bc_monitoring=staged_bc_monitoring,
+            enable_adaptive_phase3=staged_enable_adaptive_phase3,
+        )
+        staged_scheduler.print_schedule()
+
     # Auto-detect fixed weights mode based on weight_update_freq
-    use_fixed_weights = weight_update_freq >= n_epochs
+    # Note: If using staged training, fixed mode is managed by the scheduler
+    use_fixed_weights = weight_update_freq >= n_epochs and not use_staged_training
     if use_fixed_weights:
         print(f"Fixed weights mode enabled (weight_update_freq={weight_update_freq} >= n_epochs={n_epochs})")
 
-    weight_manager = WeightManager(use_initial_scales, weight_lr, use_fixed_weights=use_fixed_weights)
+    weight_manager = WeightManager(
+        use_initial_scales,
+        weight_lr,
+        use_fixed_weights=use_fixed_weights,
+        staged_scheduler=staged_scheduler
+    )
     logger = TrainingLogger()
     sampling = SamplingHelpers()
 
@@ -252,8 +280,12 @@ def train_pinn_pool_batch_autoweight(
         else:
             losses = compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic)
 
+        # Compute total BC loss (for staged training monitoring)
+        current_bc_loss = losses['surf'] + losses['wt_head'] + losses['wt_kin']
+        current_bc_loss_value = current_bc_loss.item() if torch.is_tensor(current_bc_loss) else current_bc_loss
+
         # Apply weights and compute gradients (conditionally)
-        weights = weight_manager.get_weights()
+        weights = weight_manager.get_weights(epoch=epoch, current_bc_loss=current_bc_loss_value)
         if weight_manager.is_using_fixed_weights():
             # Use lightweight computation for fixed weights
             weighted_losses, gradients, total_loss = apply_weights_fixed_mode(losses, weights)
@@ -294,7 +326,7 @@ def train_pinn_pool_batch_autoweight(
 
         # Update weights periodically
         if (epoch + 1) % weight_update_freq == 0 and epoch > 0:
-            weight_manager.update(gradients)
+            weight_manager.update(gradients, epoch=epoch)
             weight_manager.print_update(epoch)
 
         # Record metrics
@@ -370,6 +402,16 @@ def train_pinn_pool_batch_autoweight(
             logger.print_progress(
                 epoch, n_epochs, total_loss, weighted_losses, gradients, weights, cache_manager
             )
+
+            # Print staged training status if enabled
+            if staged_scheduler is not None:
+                phase = staged_scheduler.get_phase(epoch)
+                print(f"  [Staged Training] Phase {phase}/3 | PDE weight: {weights['pde']:.4e}")
+                if phase == 2 and staged_scheduler.pde_weight_paused:
+                    print(f"  [WARNING] PDE weight increase PAUSED (BC loss too high)")
+                if staged_scheduler.baseline_bc_loss is not None:
+                    bc_ratio = current_bc_loss_value / staged_scheduler.baseline_bc_loss
+                    print(f"  [BC Monitor] Current/Baseline = {bc_ratio:.2f}x")
 
         # Compute and record sample loss (over full dataset) every 500 epochs
         if (epoch + 1) % 500 == 0 or epoch == 0:
