@@ -106,6 +106,8 @@ class WeightManager:
         initial_ic_zb_weight: float = None,
         # Fixed weights mode
         use_fixed_weights: bool = False,
+        # Staged training scheduler
+        staged_scheduler: 'StagedTrainingScheduler' = None,
     ):
         self.weight_lr = float(weight_lr)
         self.ema_alpha = float(ema_alpha)
@@ -113,6 +115,7 @@ class WeightManager:
         self.max_step_factor = float(max_step_factor)
         self.eps = float(eps)
         self.use_fixed_weights = use_fixed_weights
+        self.staged_scheduler = staged_scheduler
 
         # Use custom weights if provided, otherwise use default logic
         if initial_pde_weight is not None:
@@ -137,6 +140,9 @@ class WeightManager:
         self.weight_history = {k: [self.weights[k]] for k in self.weights}
         self.grad_ema = {k: None for k in self.weights}
 
+        # For staged training
+        self.current_epoch = 0
+
     def _to_float(self, x):
         try:
             # works for python float, numpy scalar, or torch tensor on CPU
@@ -145,15 +151,25 @@ class WeightManager:
             # last resort
             return np.float64(x).item()
 
-    def update(self, current_grads, counts=None, already_weighted: bool = True):
+    def update(self, current_grads, counts=None, already_weighted: bool = True, epoch: int = None):
         """
         current_grads: dict term-> grad L2 norm (weighted if already_weighted=True)
         counts: optional dict term-> number of samples contributing to that term
         already_weighted: if True, unweight using current self.weights
+        epoch: current epoch (required for staged training)
         """
-        # Skip update if using fixed weights
+        # Update current epoch for staged training
+        if epoch is not None:
+            self.current_epoch = epoch
+
+        # Skip update if using fixed weights (or if staged scheduler controls weights)
         if self.use_fixed_weights:
             return
+
+        # Skip update if using staged scheduler and not in adaptive phase
+        if self.staged_scheduler is not None:
+            if not self.staged_scheduler.should_use_adaptive_weights(self.current_epoch):
+                return
             
         # 1) Build unweighted, per-sample grad estimates
         g_unw = {}
@@ -214,8 +230,37 @@ class WeightManager:
         for k in self.weights:
             self.weight_history[k].append(self.weights[k])
 
-    def get_weights(self):
-        return dict(self.weights)
+    def get_weights(self, epoch: int = None, current_bc_loss: float = None):
+        """
+        Get current weights.
+
+        Args:
+            epoch: Current epoch (for staged training)
+            current_bc_loss: Current BC loss (for staged training monitoring)
+
+        Returns:
+            Dictionary of weights
+        """
+        # Update epoch if provided
+        if epoch is not None:
+            self.current_epoch = epoch
+
+        # If using staged scheduler, get weights from scheduler
+        if self.staged_scheduler is not None:
+            scheduled_weights = self.staged_scheduler.get_weights(self.current_epoch, current_bc_loss)
+
+            # If in Phase 3 with adaptive weights enabled, use current adaptive weights
+            # but only if they have been updated (not first epoch)
+            if self.staged_scheduler.should_use_adaptive_weights(self.current_epoch):
+                # Return current adaptive weights (which are being updated)
+                return dict(self.weights)
+            else:
+                # Update weights to match schedule
+                self.weights = scheduled_weights.copy()
+                return dict(self.weights)
+        else:
+            # Standard behavior: return current weights
+            return dict(self.weights)
 
     def print_update(self, epoch):
         print(f"\n[Epoch {epoch+1}] Updated weights:")
@@ -223,6 +268,241 @@ class WeightManager:
             g = self.grad_ema[k]
             gtxt = f"{g:.3e}" if (g is not None) else "nan"
             print(f"  {k}: {self.weights[k]:.3e} (grad_unw_ema: {gtxt})")
+
+
+class StagedTrainingScheduler:
+    """
+    Staged training scheduler for PINN training to resolve BC-PDE gradient conflicts.
+
+    Implements 3-phase training:
+    - Phase 1 (0-20%): BC-focused, minimal PDE weight
+    - Phase 2 (20-50%): Gradual PDE introduction with BC monitoring
+    - Phase 3 (50-100%): Balanced training with optional adaptive weights
+    """
+
+    def __init__(
+        self,
+        n_epochs,
+        # Phase boundaries (as fraction of total epochs)
+        phase1_end=0.20,
+        phase2_end=0.50,
+        # Phase 1 weights (BC-focused)
+        phase1_pde=0.0001,
+        phase1_surf=10,
+        phase1_wt_head=1,
+        phase1_wt_kin=1,
+        phase1_ic_h=1,
+        phase1_ic_zb=1,
+        # Phase 2 weights (gradual PDE introduction)
+        phase2_pde_start=0.0001,
+        phase2_pde_end=0.01,
+        phase2_surf=10,
+        phase2_wt_head=1,
+        phase2_wt_kin=1,
+        phase2_ic_h=1,
+        phase2_ic_zb=1,
+        # Phase 3 weights (balanced)
+        phase3_pde=0.01,
+        phase3_surf=10.0,
+        phase3_wt_head=1,
+        phase3_wt_kin=1,
+        phase3_ic_h=1,
+        phase3_ic_zb=1,
+        # BC loss monitoring (to pause PDE increase if BCs degrade)
+        bc_loss_threshold_multiplier=5.0,  # Pause if BC loss > this × phase1_bc_loss
+        enable_bc_monitoring=True,
+        # Enable adaptive weights in Phase 3
+        enable_adaptive_phase3=True,
+    ):
+        self.n_epochs = n_epochs
+
+        # Phase boundaries (convert to epoch numbers)
+        self.phase1_end_epoch = int(phase1_end * n_epochs)
+        self.phase2_end_epoch = int(phase2_end * n_epochs)
+
+        # Store phase weights
+        self.phase1_weights = {
+            'pde': phase1_pde,
+            'surf': phase1_surf,
+            'wt_head': phase1_wt_head,
+            'wt_kin': phase1_wt_kin,
+            'ic_h': phase1_ic_h,
+            'ic_zb': phase1_ic_zb,
+        }
+
+        self.phase2_weights_start = {
+            'pde': phase2_pde_start,
+            'surf': phase2_surf,
+            'wt_head': phase2_wt_head,
+            'wt_kin': phase2_wt_kin,
+            'ic_h': phase2_ic_h,
+            'ic_zb': phase2_ic_zb,
+        }
+
+        self.phase2_weights_end = {
+            'pde': phase2_pde_end,
+            'surf': phase2_surf,
+            'wt_head': phase2_wt_head,
+            'wt_kin': phase2_wt_kin,
+            'ic_h': phase2_ic_h,
+            'ic_zb': phase2_ic_zb,
+        }
+
+        self.phase3_weights = {
+            'pde': phase3_pde,
+            'surf': phase3_surf,
+            'wt_head': phase3_wt_head,
+            'wt_kin': phase3_wt_kin,
+            'ic_h': phase3_ic_h,
+            'ic_zb': phase3_ic_zb,
+        }
+
+        # BC loss monitoring
+        self.bc_loss_threshold_multiplier = bc_loss_threshold_multiplier
+        self.enable_bc_monitoring = enable_bc_monitoring
+        self.baseline_bc_loss = None  # Will be set at end of Phase 1
+        self.pde_weight_paused = False
+        self.pause_epoch = None
+
+        # Adaptive weights in Phase 3
+        self.enable_adaptive_phase3 = enable_adaptive_phase3
+
+        # Current phase tracking
+        self.current_phase = 1
+        self.phase_transitions = []  # Track when phases change
+
+        # PDE weight trajectory tracking (for monitoring)
+        self.pde_weight_trajectory = []
+
+    def get_phase(self, epoch):
+        """Determine which phase we're in."""
+        if epoch < self.phase1_end_epoch:
+            return 1
+        elif epoch < self.phase2_end_epoch:
+            return 2
+        else:
+            return 3
+
+    def get_weights(self, epoch, current_bc_loss=None):
+        """
+        Get weights for current epoch.
+
+        Args:
+            epoch: Current epoch number
+            current_bc_loss: Current total BC loss (surf + wt_head + wt_kin)
+                            Used for BC monitoring in Phase 2
+
+        Returns:
+            Dictionary of weights for each loss component
+        """
+        phase = self.get_phase(epoch)
+
+        # Track phase transitions
+        if phase != self.current_phase:
+            self.phase_transitions.append((epoch, phase))
+            self.current_phase = phase
+
+            # At end of Phase 1, record baseline BC loss for monitoring
+            if phase == 2 and self.enable_bc_monitoring and current_bc_loss is not None:
+                self.baseline_bc_loss = current_bc_loss
+                print(f"\n{'='*70}")
+                print(f"Phase 1 → Phase 2 Transition (Epoch {epoch})")
+                print(f"{'='*70}")
+                print(f"Baseline BC loss: {self.baseline_bc_loss:.3e}")
+                print(f"BC monitoring threshold: {self.baseline_bc_loss * self.bc_loss_threshold_multiplier:.3e}")
+                print(f"Starting gradual PDE weight increase...")
+                print(f"{'='*70}\n")
+
+        if phase == 1:
+            # Phase 1: BC-focused
+            weights = self.phase1_weights.copy()
+
+        elif phase == 2:
+            # Phase 2: Gradual PDE introduction with BC monitoring
+            phase2_progress = (epoch - self.phase1_end_epoch) / (self.phase2_end_epoch - self.phase1_end_epoch)
+
+            # Check if we should pause PDE weight increase
+            if self.enable_bc_monitoring and current_bc_loss is not None and self.baseline_bc_loss is not None:
+                bc_threshold = self.baseline_bc_loss * self.bc_loss_threshold_multiplier
+
+                if current_bc_loss > bc_threshold:
+                    if not self.pde_weight_paused:
+                        self.pde_weight_paused = True
+                        self.pause_epoch = epoch
+                        print(f"\n{'!'*70}")
+                        print(f"WARNING: BC loss exceeded threshold at epoch {epoch}")
+                        print(f"BC loss: {current_bc_loss:.3e} > threshold: {bc_threshold:.3e}")
+                        print(f"PAUSING PDE weight increase to protect BCs")
+                        print(f"{'!'*70}\n")
+                else:
+                    # BC loss is acceptable, resume if paused
+                    if self.pde_weight_paused:
+                        print(f"\nBC loss recovered. Resuming PDE weight increase at epoch {epoch}")
+                        self.pde_weight_paused = False
+
+            # Compute weights with smooth interpolation
+            weights = {}
+            for key in self.phase2_weights_start:
+                if key == 'pde' and self.pde_weight_paused:
+                    # Keep PDE weight frozen if paused
+                    pause_progress = (self.pause_epoch - self.phase1_end_epoch) / (self.phase2_end_epoch - self.phase1_end_epoch)
+                    weights[key] = self.phase2_weights_start[key] + (
+                        self.phase2_weights_end[key] - self.phase2_weights_start[key]
+                    ) * pause_progress
+                else:
+                    # Linear interpolation from start to end
+                    weights[key] = self.phase2_weights_start[key] + (
+                        self.phase2_weights_end[key] - self.phase2_weights_start[key]
+                    ) * phase2_progress
+
+        else:
+            # Phase 3: Balanced training
+            if epoch == self.phase2_end_epoch:
+                print(f"\n{'='*70}")
+                print(f"Phase 2 → Phase 3 Transition (Epoch {epoch})")
+                print(f"{'='*70}")
+                print(f"Entering balanced training phase")
+                if self.enable_adaptive_phase3:
+                    print(f"Adaptive weight tuning ENABLED for fine-tuning")
+                else:
+                    print(f"Using fixed weights")
+                print(f"{'='*70}\n")
+
+            weights = self.phase3_weights.copy()
+
+        # Track PDE weight for visualization
+        self.pde_weight_trajectory.append((epoch, weights['pde']))
+
+        return weights
+
+    def should_use_adaptive_weights(self, epoch):
+        """
+        Check if adaptive weights should be used at this epoch.
+        Only enabled in Phase 3 if configured.
+        """
+        phase = self.get_phase(epoch)
+        return phase == 3 and self.enable_adaptive_phase3
+
+    def print_schedule(self):
+        """Print the complete training schedule."""
+        print(f"\n{'='*70}")
+        print("Staged Training Schedule")
+        print(f"{'='*70}")
+        print(f"Total epochs: {self.n_epochs}")
+        print(f"\nPhase 1 (BC-focused): Epochs 0-{self.phase1_end_epoch}")
+        print(f"  Weights: {self.phase1_weights}")
+        print(f"\nPhase 2 (Gradual PDE): Epochs {self.phase1_end_epoch}-{self.phase2_end_epoch}")
+        print(f"  PDE weight: {self.phase2_weights_start['pde']:.4f} → {self.phase2_weights_end['pde']:.4f}")
+        print(f"  Other weights: {dict((k,v) for k,v in self.phase2_weights_start.items() if k != 'pde')}")
+        if self.enable_bc_monitoring:
+            print(f"  BC monitoring: ENABLED (threshold = {self.bc_loss_threshold_multiplier}× baseline)")
+        print(f"\nPhase 3 (Balanced): Epochs {self.phase2_end_epoch}-{self.n_epochs}")
+        print(f"  Weights: {self.phase3_weights}")
+        if self.enable_adaptive_phase3:
+            print(f"  Adaptive weights: ENABLED")
+        else:
+            print(f"  Adaptive weights: DISABLED")
+        print(f"{'='*70}\n")
 
 
 class CachePoolManager:
