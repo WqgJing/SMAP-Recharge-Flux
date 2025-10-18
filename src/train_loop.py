@@ -21,11 +21,11 @@ import glob
 
 def train_pinn_pool_batch_autoweight(
     soil_params,
-    q0_data,
-    Sy,
-    zr,
-    h_net_config,
-    zb_net_config,
+    theta0_data,
+    Sy=0.3,
+    zr=0.5,
+    h_net_config=None,
+    zb_net_config=None,
     L=5.0,  # ← Add characteristic length parameter
     S_max=1e-7,  # ← Add sink term parameter
     n_epochs=1000,
@@ -60,14 +60,21 @@ def train_pinn_pool_batch_autoweight(
     keep_last_n_checkpoints=3,  # Keep only last N checkpoints (None = keep all)
 ):
     """
-    Training with pool + small batch sampling approach.
+    Training with pool + small batch sampling approach using moisture BC.
     """
-    
-    # --- Derive time bounds from q0_data ---
-    q0_times_t = torch.tensor(q0_data[0], dtype=torch.float32, device=device).view(-1, 1)
-    q0_values_t = torch.tensor(q0_data[1], dtype=torch.float32, device=device)  # For importance weighting
-    t_min = float(q0_times_t.min().item())
-    t_max = float(q0_times_t.max().item())
+
+    # Validate moisture BC data
+    if theta0_data is None:
+        raise ValueError("theta0_data is required for moisture BC")
+
+    # --- Derive time bounds from moisture BC data ---
+    bc_times = theta0_data[0]
+    bc_values = theta0_data[1]
+
+    bc_times_t = torch.tensor(bc_times, dtype=torch.float32, device=device).view(-1, 1)
+    bc_values_t = torch.tensor(bc_values, dtype=torch.float32, device=device)  # For importance weighting
+    t_min = float(bc_times_t.min().item())
+    t_max = float(bc_times_t.max().item())
     z_max = 0.0  # surface at z = 0
 
     # --- CREATE NORMALIZER (NEW) ---
@@ -76,7 +83,7 @@ def train_pinn_pool_batch_autoweight(
     # --- Model & optimizer ---
     model = RichardsPINN(
         soil_params=soil_params,
-        q0_data=q0_data,
+        theta0_data=theta0_data,
         Sy=Sy,
         zr=zr,
         h_net_config=h_net_config,
@@ -184,7 +191,7 @@ def train_pinn_pool_batch_autoweight(
         cache_size=cache_size,
         batch_size=batch_size,
         device=device,
-        q0_times_t=q0_times_t,
+        q0_times_t=bc_times_t,
         t_max=t_max,
         boundary_ratio=boundary_ratio,
         high_residual_ratio=high_residual_ratio,
@@ -210,7 +217,7 @@ def train_pinn_pool_batch_autoweight(
         f"High residual ratio: {high_residual_ratio:.1%}"
     )
     print(
-        f"Time domain from q0: t∈[{t_min:.3f}, {t_max:.3f}], "
+        f"Time domain from theta0: t∈[{t_min:.3f}, {t_max:.3f}], "
         f"z adaptive in [-z_b(t), 0]"
     )
     print(f"Initial weights: {weight_manager.get_weights()}")
@@ -229,8 +236,8 @@ def train_pinn_pool_batch_autoweight(
 
         # Gradient-based boundary condition sampling (three-way: interp + neighbor + baseline)
         t_bc, _ = gradient_based_sampling(
-            q0_times_t,
-            q0_values_t,
+            bc_times_t,
+            bc_values_t,
             batch_size_bc,
             device=device,
             use_interpolation=True,
@@ -374,7 +381,7 @@ def train_pinn_pool_batch_autoweight(
         # Compute and record sample loss (over full dataset) every 500 epochs
         if (epoch + 1) % 500 == 0 or epoch == 0:
             sample_losses_dict = compute_full_sample_loss(
-                model_core, cache_manager, q0_times_t, t_min, z_max, device
+                model_core, cache_manager, bc_times_t, t_min, z_max, device
             )
             logger.record_sample_losses(epoch, sample_losses_dict, weights)
 
@@ -493,7 +500,7 @@ def load_pretrained_model(checkpoint_path, device='cpu'):
 
 def finetune_pinn(
     checkpoint_path,
-    new_q0_data,
+    new_theta0_data,
     zb_initial=None,
     h_net_config=None,
     zb_net_config=None,
@@ -530,14 +537,14 @@ def finetune_pinn(
     keep_last_n_checkpoints=3,
 ):
     """
-    Fine-tune a pretrained PINN model on new boundary condition data.
+    Fine-tune a pretrained PINN model on new moisture boundary condition data.
 
     Works with any time duration - uses fixed reference time from base model.
 
     Args:
         checkpoint_path: Path to base model checkpoint (.pt file)
-        new_q0_data: NEW boundary condition data, tuple of (times, fluxes)
-                     Can have different time duration than original training data
+        new_theta0_data: NEW moisture BC data, tuple of (times, soil_moisture)
+                        Can have different time duration than original training data
         zb_initial: Initial water table depth for new scenario (if None, use from checkpoint)
         h_net_config: Network config (if None, must be same as training)
         zb_net_config: Network config (if None, must be same as training)
@@ -597,8 +604,8 @@ def finetune_pinn(
     z_max_tilde = network_scaling['z_max_tilde']
 
     # Get new data time range
-    new_t_min = min(new_q0_data[0])
-    new_t_max = max(new_q0_data[0])
+    new_t_min = min(new_theta0_data[0])
+    new_t_max = max(new_theta0_data[0])
     new_duration = new_t_max - new_t_min
 
     # Create normalizer (same as base)
@@ -621,7 +628,7 @@ def finetune_pinn(
     print(f"\nNew boundary condition data:")
     print(f"  Time range: [{new_t_min:.1f}, {new_t_max:.1f}] s")
     print(f"  Duration: {new_duration/86400:.2f} days (can differ from training!)")
-    print(f"  {len(new_q0_data[0])} data points")
+    print(f"  {len(new_theta0_data[0])} data points")
     print(f"\nFine-tuning hyperparameters:")
     print(f"  n_epochs={n_epochs} (vs {checkpoint.get('training_config', {}).get('n_epochs', 'N/A')} base)")
     print(f"  learning_rate={learning_rate:.2e}")
@@ -656,7 +663,7 @@ def finetune_pinn(
 
     model = RichardsPINN(
         soil_params=soil_params,
-        q0_data=new_q0_data,  # NEW boundary conditions
+        theta0_data=new_theta0_data,  # NEW boundary conditions
         Sy=Sy,
         zr=zr,
         h_net_config=h_net_config,
@@ -673,14 +680,14 @@ def finetune_pinn(
     model.load_state_dict(checkpoint['model_state_dict'])
     print(f"Loaded pretrained weights from base model")
 
-    # CRITICAL: Update q0 data to NEW boundary conditions
-    # load_state_dict() overwrites the q0 buffers with OLD training data
-    # We must manually restore the NEW q0 data after loading weights
-    model.q0_times_dim = torch.tensor(new_q0_data[0], dtype=torch.float32, device=device)
-    model.q0_values_dim = torch.tensor(new_q0_data[1], dtype=torch.float32, device=device)
-    model.q0_times_tilde = normalizer.normalize_t(model.q0_times_dim)
-    model.q0_values_tilde = normalizer.normalize_q(model.q0_values_dim)
-    print(f"Updated boundary condition data to NEW q0 (overriding checkpoint data)")
+    # CRITICAL: Update theta0 data to NEW boundary conditions
+    # load_state_dict() overwrites the theta0 buffers with OLD training data
+    # We must manually restore the NEW theta0 data after loading weights
+    model.theta0_times_dim = torch.tensor(new_theta0_data[0], dtype=torch.float32, device=device)
+    model.theta0_values_dim = torch.tensor(new_theta0_data[1], dtype=torch.float32, device=device)
+    model.theta0_times_tilde = normalizer.normalize_t(model.theta0_times_dim)
+    model.theta0_values_tilde = (model.theta0_values_dim - normalizer.theta_r) / normalizer.theta_star
+    print(f"Updated boundary condition data to NEW theta0 (overriding checkpoint data)")
 
     # Multi-GPU setup (same as base training)
     n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
@@ -716,7 +723,7 @@ def finetune_pinn(
         print(f"Fixed weights mode enabled (weight_update_freq={weight_update_freq} >= n_epochs={n_epochs})")
 
     # Initialize weights from checkpoint if available, otherwise use initial scales
-    weight_manager = WeightManager(use_initial_scales, weight_lr, use_fixed_weights=use_fixed_weights)
+    weight_manager = WeightManager(use_initial_scales, weight_lr, use_fixed_weights=use_fixed_weights, bc_type=model_core.bc_type)
     if 'weight_manager_state' in checkpoint:
         weight_manager.weights = checkpoint['weight_manager_state']['weights']
         print(f"Using weights from base model: {weight_manager.weights}")
@@ -735,15 +742,15 @@ def finetune_pinn(
         print(f"Checkpointing enabled: saving every {checkpoint_freq} epochs to {checkpoint_dir}/")
 
     # Initialize cache pool manager
-    q0_times_t = torch.tensor(new_q0_data[0], dtype=torch.float32, device=device).view(-1, 1)
-    t_min = float(q0_times_t.min().item())
-    t_max = float(q0_times_t.max().item())
+    theta0_times_t = torch.tensor(new_theta0_data[0], dtype=torch.float32, device=device).view(-1, 1)
+    t_min = float(theta0_times_t.min().item())
+    t_max = float(theta0_times_t.max().item())
 
     cache_manager = CachePoolManager(
         cache_size=cache_size,
         batch_size=batch_size,
         device=device,
-        q0_times_t=q0_times_t,
+        q0_times_t=theta0_times_t,
         t_max=t_max,
         boundary_ratio=boundary_ratio,
         high_residual_ratio=high_residual_ratio,
@@ -780,10 +787,10 @@ def finetune_pinn(
         z_col, t_col = cache_manager.sample_batch(model_core, epoch)
 
         # Gradient-based boundary condition sampling
-        q0_values_t = torch.tensor(new_q0_data[1], dtype=torch.float32, device=device)
+        theta0_values_t = torch.tensor(new_theta0_data[1], dtype=torch.float32, device=device)
         t_bc, _ = gradient_based_sampling(
-            q0_times_t,
-            q0_values_t,
+            theta0_times_t,
+            theta0_values_t,
             batch_size_bc,
             device=device,
             use_interpolation=True,

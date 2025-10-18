@@ -105,12 +105,12 @@ class RichardsPINN(nn.Module):
     def __init__(
         self,
         soil_params,
-        q0_data,
-        Sy,
-        zr,
-        h_net_config,
-        zb_net_config,
-        normalizer,
+        theta0_data,
+        Sy=0.3,
+        zr=0.5,
+        h_net_config=None,
+        zb_net_config=None,
+        normalizer=None,
         zb_initial=1.5,
         t_max=86400,
         z_max_tilde=1.0,
@@ -120,7 +120,7 @@ class RichardsPINN(nn.Module):
         """
         Args:
             soil_params: Soil parameters dict (for normalizer)
-            q0_data: Tuple of (times, fluxes) in DIMENSIONAL form
+            theta0_data: Tuple of (times, soil_moisture) in DIMENSIONAL form - REQUIRED
             Sy: Specific yield (dimensional)
             zr: Root zone depth (dimensional) [m]
             h_net_config: Config dict for pressure head network
@@ -133,6 +133,10 @@ class RichardsPINN(nn.Module):
             device: Device for computation
         """
         super().__init__()
+
+        # Validate moisture BC data
+        if theta0_data is None:
+            raise ValueError("theta0_data is required for moisture BC")
 
         # Store normalizer
         self.normalizer = normalizer
@@ -157,20 +161,21 @@ class RichardsPINN(nn.Module):
             zb_net_config["num_layers"],
             t_ref_tilde=t_ref_tilde
         )
-        
+
         # Store dimensionless parameters
         self.Sy_tilde = normalizer.normalize_Sy(Sy)
         self.zr_tilde = normalizer.normalize_z(zr)
         self.zb_initial_tilde = normalizer.normalize_zb(zb_initial)
-        
-        # Store dimensional q0 data and normalize
-        self.q0_times_dim = torch.tensor(q0_data[0], dtype=torch.float32, device=device)
-        self.q0_values_dim = torch.tensor(q0_data[1], dtype=torch.float32, device=device)
-        
-        # Normalize q0 data
-        self.q0_times_tilde = normalizer.normalize_t(self.q0_times_dim)
-        self.q0_values_tilde = normalizer.normalize_q(self.q0_values_dim)
-        
+
+        # Store and normalize moisture BC data
+        self.theta0_times_dim = torch.tensor(theta0_data[0], dtype=torch.float32, device=device)
+        self.theta0_values_dim = torch.tensor(theta0_data[1], dtype=torch.float32, device=device)
+
+        # Normalize moisture: θ̃ = (θ - θ_r) / θ_* = S_e
+        # θ_* = θ_s - θ_r (from normalizer)
+        self.theta0_values_tilde = (self.theta0_values_dim - normalizer.theta_r) / normalizer.theta_star
+        self.theta0_times_tilde = normalizer.normalize_t(self.theta0_times_dim)
+
         # Store S_max_tilde from normalizer
         self.S_max_tilde = normalizer.S_max_tilde
 
@@ -190,25 +195,26 @@ class RichardsPINN(nn.Module):
         zb_tilde = self.zb_net(t_tilde)
         return h_tilde, zb_tilde
 
-    def surface_flux_tilde(self, t_tilde):
-        """Prescribed dimensionless surface flux q̃0(t̃) - interpolated from input data (GPU-optimized)"""
+
+    def surface_moisture_tilde(self, t_tilde):
+        """Prescribed dimensionless surface moisture θ̃0(t̃) = S_e(t̃) - interpolated from input data (GPU-optimized)"""
         t_flat = t_tilde.flatten()
 
         # Vectorized searchsorted for all points at once (GPU-efficient)
-        indices = torch.searchsorted(self.q0_times_tilde, t_flat)
-        indices = torch.clamp(indices, 1, len(self.q0_times_tilde) - 1)
+        indices = torch.searchsorted(self.theta0_times_tilde, t_flat)
+        indices = torch.clamp(indices, 1, len(self.theta0_times_tilde) - 1)
 
-        # Get surrounding time and flux values (vectorized)
-        t1 = self.q0_times_tilde[indices - 1]
-        t2 = self.q0_times_tilde[indices]
-        q1 = self.q0_values_tilde[indices - 1]
-        q2 = self.q0_values_tilde[indices]
+        # Get surrounding time and moisture values (vectorized)
+        t1 = self.theta0_times_tilde[indices - 1]
+        t2 = self.theta0_times_tilde[indices]
+        theta1 = self.theta0_values_tilde[indices - 1]
+        theta2 = self.theta0_values_tilde[indices]
 
         # Vectorized linear interpolation
         alpha = (t_flat - t1) / (t2 - t1 + 1e-12)
-        q0_tilde_interp = q1 + alpha * (q2 - q1)
+        theta0_tilde_interp = theta1 + alpha * (theta2 - theta1)
 
-        return q0_tilde_interp.reshape_as(t_tilde)
+        return theta0_tilde_interp.reshape_as(t_tilde)
 
     def root_uptake_tilde(self, z_tilde, t_tilde):
         """Dimensionless root uptake S̃(z̃,t̃) in the root zone"""
@@ -265,28 +271,32 @@ class RichardsPINN(nn.Module):
         # Dimensionless PDE: ∂S_e/∂t̃ + ∂q̃/∂z̃ + S̃ = 0
         return dSe_dt_tilde + dq_dz_tilde + S_tilde
 
-    def surface_bc_residual(self, t):
+
+    def surface_moisture_bc_residual(self, t):
         """
-        Dimensionless flux BC at surface
-        
+        Dimensionless soil moisture BC at surface
+
         Args:
             t: DIMENSIONAL time [s]
-        
+
         Returns:
             Dimensionless BC residual (O(1))
         """
         # Normalize input
         t_tilde = self.normalizer.normalize_t(t).requires_grad_(True)
         z0_tilde = torch.zeros_like(t_tilde, requires_grad=True, device=t_tilde.device)
-        
+
         # Compute in dimensionless space
         h0_tilde, _ = self(z0_tilde, t_tilde)
-        K0_tilde = self.normalizer.K_tilde(h0_tilde)
-        dh_dz_0_tilde = torch.autograd.grad(h0_tilde.sum(), z0_tilde, create_graph=True)[0]
-        q_surf_tilde = -K0_tilde * (dh_dz_0_tilde + 1.0)
-        q0_tilde = self.surface_flux_tilde(t_tilde)
-        
-        return q_surf_tilde - q0_tilde
+
+        # Compute effective saturation (= dimensionless moisture) from predicted head
+        Se_pred = self.normalizer.Se_tilde(h0_tilde)
+
+        # Get observed dimensionless moisture
+        theta_obs_tilde = self.surface_moisture_tilde(t_tilde)
+
+        # Residual: predicted moisture - observed moisture
+        return Se_pred - theta_obs_tilde
 
     def water_table_head_residual(self, t):
         """
