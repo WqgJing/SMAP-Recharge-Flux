@@ -3,26 +3,34 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-def plot_comprehensive_results(model, q0_data, soil_params, n_t=200, n_z=100, device='cpu'):
+def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, device='cpu'):
     """
     Comprehensive plotting with 5 subplots - NORMALIZED VERSION
+
+    Args:
+        model: Trained PINN model
+        bc_data: Tuple of (times, values) - either flux or moisture data depending on model.bc_type
+        soil_params: Soil parameters dictionary
+        n_t: Number of time points for visualization grid
+        n_z: Number of depth points for visualization grid
+        device: Device for computation
     """
     model.eval()
 
-    # Get time range from q0_data
-    t_min, t_max = min(q0_data[0]), max(q0_data[0])
+    # Get time range from BC data
+    t_min, t_max = min(bc_data[0]), max(bc_data[0])
 
-    # Create time grid
-    t_lin = torch.linspace(t_min, t_max, n_t).to(device)
+    # Create time grid (use float32 to match model dtype)
+    t_lin = torch.linspace(t_min, t_max, n_t, dtype=torch.float32).to(device)
 
     # Get water table depth over time - FIXED
     with torch.no_grad():
         zb_vals = model.predict_water_table(t_lin.view(-1, 1)).cpu().numpy().flatten()
 
-    # Create adaptive z grid
+    # Create adaptive z grid (use float32 to match model dtype)
     z_min = -np.max(zb_vals) - 0.5
     z_max = 0.0
-    z_lin = torch.linspace(z_min, z_max, n_z).to(device)
+    z_lin = torch.linspace(z_min, z_max, n_z, dtype=torch.float32).to(device)
 
     # Create meshgrid for h(z,t)
     T, Z = torch.meshgrid(t_lin, z_lin, indexing="ij")
@@ -45,15 +53,15 @@ def plot_comprehensive_results(model, q0_data, soil_params, n_t=200, n_z=100, de
         H_masked[i, mask] = np.nan
 
     # Get surface head h(0,t) - FIXED
-    z_surface = torch.zeros(n_t, 1).to(device)
+    z_surface = torch.zeros(n_t, 1, dtype=torch.float32).to(device)
     t_surface = t_lin.view(-1, 1)
     with torch.no_grad():
         h_surface, _ = model.predict_head(z_surface, t_surface)
     h_surface = h_surface.cpu().numpy().flatten()
 
     # Initial conditions - FIXED
-    t_ic = torch.tensor([t_min]).to(device).view(-1, 1)
-    z_ic_range = torch.linspace(-1.0, 0.0, 50).to(device).view(-1, 1)
+    t_ic = torch.tensor([t_min], dtype=torch.float32).to(device).view(-1, 1)
+    z_ic_range = torch.linspace(-1.0, 0.0, 50, dtype=torch.float32).to(device).view(-1, 1)
 
     # Prescribed IC
     with torch.no_grad():
@@ -67,7 +75,7 @@ def plot_comprehensive_results(model, q0_data, soil_params, n_t=200, n_z=100, de
     h_ic_modeled = h_ic_modeled.cpu().numpy().flatten()
 
     # Calculate h at water table - FIXED
-    z_wt = (-torch.tensor(zb_vals)).to(device).view(-1, 1)
+    z_wt = (-torch.tensor(zb_vals, dtype=torch.float32)).to(device).view(-1, 1)
     t_wt = t_lin.view(-1, 1)
     with torch.no_grad():
         h_at_wt, _ = model.predict_head(z_wt, t_wt)
@@ -107,31 +115,33 @@ def plot_comprehensive_results(model, q0_data, soil_params, n_t=200, n_z=100, de
     axs[0, 2].grid(True, alpha=0.3)
     axs[0, 2].legend()
 
-    # Subplot 4: Surface flux comparison - FIXED
-    z_surf_req = torch.zeros(n_t, 1, requires_grad=True).to(device)
+    # Subplot 4: Surface Moisture BC comparison (Dirichlet)
+    z_surf_req = torch.zeros(n_t, 1, dtype=torch.float32, requires_grad=True).to(device)
     t_surf_req = t_lin.view(-1, 1).requires_grad_(True)
 
     # Normalize for computation
     z_surf_tilde = model.normalizer.normalize_z(z_surf_req)
     t_surf_tilde = model.normalizer.normalize_t(t_surf_req)
-    
+
     h_surf_grad_tilde, _ = model(z_surf_tilde, t_surf_tilde)
-    K_surf_tilde = model.normalizer.K_tilde(h_surf_grad_tilde)
-    dh_dz_surf_tilde = torch.autograd.grad(h_surf_grad_tilde.sum(), z_surf_tilde, create_graph=True)[0]
-    q_surf_tilde = -K_surf_tilde * (dh_dz_surf_tilde + 1.0)
-    
-    # Denormalize flux
-    q_surf_simulated = model.normalizer.denormalize_q(q_surf_tilde).detach().cpu().numpy().flatten()
+
+    # For moisture BC: compare moisture values
+    # Convert predicted head to effective saturation (dimensionless moisture)
+    Se_pred = model.normalizer.Se_tilde(h_surf_grad_tilde)
+    # Convert to volumetric moisture: θ = θr + Se × (θs - θr)
+    theta_pred = (soil_params['theta_r'] +
+                 Se_pred.detach().cpu().numpy().flatten() *
+                 (soil_params['theta_s'] - soil_params['theta_r']))
 
     axs[1, 0].plot(
-        np.array(q0_data[0]) / 86400, np.array(q0_data[1]) * 1e6, "g-", lw=2, label="q0 (prescribed)"
+        np.array(bc_data[0]) / 86400, np.array(bc_data[1]), "g-", lw=2, label="θ0 (prescribed)"
     )
     axs[1, 0].plot(
-        t_lin.cpu().numpy() / 86400, q_surf_simulated * 1e6, "r--", lw=2, label="q0 (simulated)"
+        t_lin.cpu().numpy() / 86400, theta_pred, "r--", lw=2, label="θ0 (simulated)"
     )
-    axs[1, 0].set_title("Surface Flux Comparison")
+    axs[1, 0].set_title("Surface Moisture Comparison")
     axs[1, 0].set_xlabel("Time [days]")
-    axs[1, 0].set_ylabel("q0 [μm/s]")
+    axs[1, 0].set_ylabel("θ0 [m³/m³]")
     axs[1, 0].legend()
     axs[1, 0].grid(True, alpha=0.3)
 

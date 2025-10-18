@@ -28,8 +28,8 @@ def compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic):
     res_pde = model.pde_residual(z_col, t_col)
     loss_pde = (res_pde**2).mean()
 
-    # Surface flux BC at z=0 with importance weights
-    res_surf = model.surface_bc_residual(t_bc)
+    # Surface BC at z=0 - moisture BC (Dirichlet)
+    res_surf = model.surface_moisture_bc_residual(t_bc)
     loss_surf = (res_surf**2).mean()
 
     # Water-table BCs
@@ -125,13 +125,17 @@ class WeightManager:
                 "ic_zb": initial_ic_zb_weight,
             }
         else:
+            # Default weights for moisture BC (Dirichlet)
+            # Moisture BC is more stable than flux BC, use lower weight (20)
+            default_surf_weight = 20
+
             base = {
-                "pde": 10 if use_initial_scales else 1.0,
-                "surf": 50 if use_initial_scales else 1.0,
-                "wt_head": 1.0,
-                "wt_kin": 1.0,
-                "ic_h": 1.0,
-                "ic_zb": 1.0,
+                "pde": 0 if use_initial_scales else 1.0,
+                "surf": default_surf_weight if use_initial_scales else 1.0,
+                "wt_head": 0,
+                "wt_kin": 0,
+                "ic_h": 0,
+                "ic_zb": 0,
             }
         self.weights = {k: float(v) for k, v in base.items()}
         self.weight_history = {k: [self.weights[k]] for k in self.weights}
@@ -502,7 +506,8 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
         t_bc = q0_times_t[i:j]
 
         # BC residuals need gradients for physics derivatives
-        res_surf = model.surface_bc_residual(t_bc)
+        # Moisture BC (Dirichlet)
+        res_surf = model.surface_moisture_bc_residual(t_bc)
         loss_accum["surf"] += (res_surf**2).sum().detach().item()
 
         res_wt_head = model.water_table_head_residual(t_bc)
