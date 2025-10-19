@@ -130,12 +130,12 @@ class WeightManager:
             default_surf_weight = 20
 
             base = {
-                "pde": 0 if use_initial_scales else 1.0,
+                "pde": 1 if use_initial_scales else 1.0,
                 "surf": default_surf_weight if use_initial_scales else 1.0,
-                "wt_head": 0,
-                "wt_kin": 0,
+                "wt_head": 1,
+                "wt_kin": 1,
                 "ic_h": 0,
-                "ic_zb": 0,
+                "ic_zb": 1,
             }
         self.weights = {k: float(v) for k, v in base.items()}
         self.weight_history = {k: [self.weights[k]] for k in self.weights}
