@@ -127,7 +127,7 @@ class WeightManager:
         else:
             # Default weights for moisture BC (Dirichlet)
             # Moisture BC is more stable than flux BC, use lower weight (20)
-            default_surf_weight = 20
+            default_surf_weight = 50
 
             base = {
                 "pde": 1 if use_initial_scales else 1.0,
