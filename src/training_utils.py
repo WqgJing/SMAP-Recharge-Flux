@@ -134,7 +134,7 @@ class WeightManager:
                 "surf": default_surf_weight if use_initial_scales else 1.0,
                 "wt_head": 1,
                 "wt_kin": 1,
-                "ic_h": 0,
+                "ic_h": 1,
                 "ic_zb": 1,
             }
         self.weights = {k: float(v) for k, v in base.items()}

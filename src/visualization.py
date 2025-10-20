@@ -28,7 +28,7 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
         zb_vals = model.predict_water_table(t_lin.view(-1, 1)).cpu().numpy().flatten()
 
     # Create adaptive z grid (use float32 to match model dtype)
-    z_min = -np.max(zb_vals) - 0.5
+    z_min = -np.max(zb_vals) - 3.5
     z_max = 0.0
     z_lin = torch.linspace(z_min, z_max, n_z, dtype=torch.float32).to(device)
 
@@ -95,7 +95,8 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
     axs[0, 0].set_title("Pressure Head h(z,t)")
     axs[0, 0].set_xlabel("Time [days]")
     axs[0, 0].set_ylabel("Depth z [m]")
-    axs[0, 0].set_ylim(-5, 0)
+    # Dynamic y-axis based on predicted vadose zone depth
+    axs[0, 0].set_ylim(z_min, 0)
     axs[0, 0].legend(loc="lower right")
     plt.colorbar(im1, ax=axs[0, 0], label="h [m]")
 
@@ -163,6 +164,7 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
     axs[1, 1].set_title("Initial Conditions Comparison")
     axs[1, 1].set_xlabel("Pressure head h [m]")
     axs[1, 1].set_ylabel("Depth z [m]")
+    # Keep fixed at -1.0 to 0.0 for initial condition profile (shallow focus)
     axs[1, 1].set_ylim(-1.0, 0.0)
     axs[1, 1].legend()
     axs[1, 1].grid(True, alpha=0.3)
