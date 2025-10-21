@@ -20,9 +20,8 @@ import os
 import argparse
 import time
 
-# Add project root to path (3 levels up: script → untitled folder → hpc → project_root)
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, project_root)
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ============================================================================
 # Imports
@@ -129,7 +128,8 @@ print("\n" + "=" * 70)
 print("LOADING SOIL MOISTURE DATA")
 print("=" * 70)
 
-# Get absolute path to data file (use project_root already defined at top)
+# Get absolute path to data file
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 data_path = os.path.join(project_root, args.data_path)
 
 print(f"Data file: {data_path}")
