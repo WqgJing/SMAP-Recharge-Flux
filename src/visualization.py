@@ -61,12 +61,46 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
 
     # Initial conditions - FIXED
     t_ic = torch.tensor([t_min], dtype=torch.float32).to(device).view(-1, 1)
-    z_ic_range = torch.linspace(-1.0, 0.0, 50, dtype=torch.float32).to(device).view(-1, 1)
 
-    # Prescribed IC
+    # Get initial water table depth to determine domain size
     with torch.no_grad():
         zb_ic = model.predict_water_table(t_ic).cpu().numpy().item()
-    h_ic_prescribed = (-zb_ic - z_ic_range.cpu().numpy().flatten())
+
+    # Sample IC over full vadose zone (from water table to surface)
+    z_ic_range = torch.linspace(-zb_ic, 0.0, 50, dtype=torch.float32).to(device).view(-1, 1)
+
+    # Prescribed IC - depends on ic_type
+
+    if model.ic_type == 'obs' and model.ic_profile is not None:
+        # Option 1: Use measured IC profile extended to water table
+        z_measured = model.ic_profile['z'].cpu().numpy()
+        h_measured = model.ic_profile['h'].cpu().numpy()
+
+        # Extend profile to water table: h(z=-zb_ic) = 0
+        z_wt = -zb_ic
+        h_wt = 0.0
+
+        # Combine measurements with water table point
+        z_extended = np.append(z_measured, z_wt)
+        h_extended = np.append(h_measured, h_wt)
+
+        # Sort by z (most negative to least negative)
+        sort_idx = np.argsort(z_extended)
+        z_extended = z_extended[sort_idx]
+        h_extended = h_extended[sort_idx]
+
+        # Interpolate over full range (includes extrapolation from deepest measurement to water table)
+        h_ic_prescribed = np.interp(z_ic_range.cpu().numpy().flatten(), z_extended, h_extended)
+
+    elif model.ic_type == 'linear' and model.ic_profile is not None:
+        # Option 2: Linear from surface h_obs to water table h=0
+        h_surface = model.ic_profile['h'][model.ic_profile['z'].argmax()].cpu().numpy()
+        z_np = z_ic_range.cpu().numpy().flatten()
+        h_ic_prescribed = h_surface * (1.0 + z_np / zb_ic)
+
+    else:
+        # Hydrostatic IC
+        h_ic_prescribed = (-zb_ic - z_ic_range.cpu().numpy().flatten())
 
     # Modeled IC - FIXED
     t_ic_expanded = t_ic.expand(50, 1)
@@ -147,13 +181,38 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
     axs[1, 0].grid(True, alpha=0.3)
 
     # Subplot 5: Initial conditions comparison
+    # Determine IC type for label and plotting style
+    if model.ic_type == 'obs':
+        ic_label = "Prescribed IC [Obs + Extrapolation]"
+    elif model.ic_type == 'linear':
+        ic_label = "Prescribed IC [Linear: h_surf to h=0]"
+    else:
+        ic_label = "Prescribed IC [Hydrostatic]"
+
+    # Plot prescribed IC line
     axs[1, 1].plot(
         h_ic_prescribed,
         z_ic_range.cpu().numpy().flatten(),
         "g-",
         lw=2,
-        label="Prescribed IC: h(z,t0)",
+        label=ic_label,
     )
+
+    # For obs IC, also show measurement points
+    if model.ic_type == 'obs' and model.ic_profile is not None:
+        axs[1, 1].scatter(
+            model.ic_profile['h'].cpu().numpy(),
+            model.ic_profile['z'].cpu().numpy(),
+            c='green',
+            s=80,
+            marker='o',
+            edgecolors='black',
+            linewidths=1.5,
+            label='Measured θ points',
+            zorder=5
+        )
+
+    # Plot modeled IC
     axs[1, 1].plot(
         h_ic_modeled,
         z_ic_range.cpu().numpy().flatten(),
@@ -164,11 +223,10 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
     axs[1, 1].set_title("Initial Conditions Comparison")
     axs[1, 1].set_xlabel("Pressure head h [m]")
     axs[1, 1].set_ylabel("Depth z [m]")
-    # Keep fixed at -1.0 to 0.0 for initial condition profile (shallow focus)
-    axs[1, 1].set_ylim(-1.0, 0.0)
+    # Dynamic y-axis based on initial water table depth (full vadose zone)
+    axs[1, 1].set_ylim(-zb_ic, 0.0)
     axs[1, 1].legend()
     axs[1, 1].grid(True, alpha=0.3)
-    axs[1, 1].invert_yaxis()
 
     # Hide unused subplot
     axs[1, 2].axis("off")

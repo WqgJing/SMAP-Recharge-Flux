@@ -41,6 +41,8 @@ def train_pinn_pool_batch_autoweight(
     high_residual_ratio=0.6,
     temperature=1.0,
     batch_size_bc=100,
+    ic_profile=None,  # ← Add measured IC profile parameter
+    ic_type='obs',  # ← IC type: 'obs', 'linear', or 'hydrostatic'
     device='cpu',
     # Gradient-based boundary sampling parameters (three-way sampling)
     interp_ratio=0.80,           # Fraction from gradient-interpolated points
@@ -92,6 +94,8 @@ def train_pinn_pool_batch_autoweight(
         zb_initial=zb_initial,
         t_max=t_max,  # ← Add t_max
         z_max_tilde=1.0,  # ← Optional, for network scaling
+        ic_profile=ic_profile,  # ← Add measured IC profile
+        ic_type=ic_type,  # ← Add IC type
         device=device,  # ← Add device parameter
     ).to(device)
 
