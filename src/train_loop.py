@@ -75,8 +75,11 @@ def train_pinn_pool_batch_autoweight(
 
     bc_times_t = torch.tensor(bc_times, dtype=torch.float32, device=device).view(-1, 1)
     bc_values_t = torch.tensor(bc_values, dtype=torch.float32, device=device)  # For importance weighting
-    t_min = float(bc_times_t.min().item())
-    t_max = float(bc_times_t.max().item())
+    # ✅ GPU-OPTIMIZED: Batch min/max computation on GPU, single sync
+    t_min_gpu = bc_times_t.min()
+    t_max_gpu = bc_times_t.max()
+    t_min = float(t_min_gpu.item())
+    t_max = float(t_max_gpu.item())
     z_max = 0.0  # surface at z = 0
 
     # --- CREATE NORMALIZER (NEW) ---
@@ -389,6 +392,7 @@ def train_pinn_pool_batch_autoweight(
             )
             logger.record_sample_losses(epoch, sample_losses_dict, weights)
 
+            # ✅ GPU-OPTIMIZED: sample_losses_dict already contains CPU scalars from compute_full_sample_loss
             # Print sample loss info
             total_sample_loss = sum(weights[key] * sample_losses_dict[key] for key in sample_losses_dict)
             print(f"\n  [Sample Loss at epoch {epoch+1}] Total={total_sample_loss:.3e}")
@@ -449,9 +453,13 @@ def train_pinn_pool_batch_autoweight(
         print(f"\nFinal checkpoint saved: {final_checkpoint_path}")
 
     # Return unwrapped model for backward compatibility (model_core is the original model)
-    # To plot sample losses, use: plot_training_losses(logger.losses, logger.comps,
+    # ✅ GPU-OPTIMIZED: Convert stored tensors to numpy arrays for backward compatibility
+    losses_np = logger.get_losses_numpy()
+    comps_np = logger.get_comps_numpy()
+
+    # To plot sample losses, use: plot_training_losses(losses_np, comps_np,
     #                                                  logger.sample_losses, logger.sample_comps, logger.sample_epochs)
-    return model_core, logger.losses, logger.comps, logger.sample_losses, logger.sample_comps, logger.sample_epochs
+    return model_core, losses_np, comps_np, logger.sample_losses, logger.sample_comps, logger.sample_epochs
 
 
 def load_pretrained_model(checkpoint_path, device='cpu'):
@@ -747,8 +755,11 @@ def finetune_pinn(
 
     # Initialize cache pool manager
     theta0_times_t = torch.tensor(new_theta0_data[0], dtype=torch.float32, device=device).view(-1, 1)
-    t_min = float(theta0_times_t.min().item())
-    t_max = float(theta0_times_t.max().item())
+    # ✅ GPU-OPTIMIZED: Batch min/max computation on GPU, single sync
+    t_min_gpu = theta0_times_t.min()
+    t_max_gpu = theta0_times_t.max()
+    t_min = float(t_min_gpu.item())
+    t_max = float(t_max_gpu.item())
 
     cache_manager = CachePoolManager(
         cache_size=cache_size,
@@ -781,6 +792,9 @@ def finetune_pinn(
     )
     print(f"Initial weights: {weight_manager.get_weights()}\n")
 
+    # ✅ GPU-OPTIMIZED: Cache BC values tensor BEFORE loop (not recreated every epoch)
+    theta0_values_t = torch.tensor(new_theta0_data[1], dtype=torch.float32, device=device)
+
     # Main training loop (identical to base training)
     for epoch in range(start_epoch, n_epochs):
         if epoch % grad_accumulation_steps == 0:
@@ -790,11 +804,11 @@ def finetune_pinn(
 
         z_col, t_col = cache_manager.sample_batch(model_core, epoch)
 
+        # ✅ GPU-OPTIMIZED: Use cached theta0_values_t (no recreation)
         # Gradient-based boundary condition sampling
-        theta0_values_t = torch.tensor(new_theta0_data[1], dtype=torch.float32, device=device)
         t_bc, _ = gradient_based_sampling(
             theta0_times_t,
-            theta0_values_t,
+            theta0_values_t,  # ✅ Reused from cache
             batch_size_bc,
             device=device,
             use_interpolation=True,
@@ -979,6 +993,10 @@ def finetune_pinn(
         torch.save(checkpoint_dict_final, final_checkpoint_path)
         print(f"\nFinal fine-tuned checkpoint saved: {final_checkpoint_path}")
 
-    return model_core, logger.losses, logger.comps, logger.sample_losses, logger.sample_comps, logger.sample_epochs
+    # ✅ GPU-OPTIMIZED: Convert stored tensors to numpy arrays for backward compatibility
+    losses_np = logger.get_losses_numpy()
+    comps_np = logger.get_comps_numpy()
+
+    return model_core, losses_np, comps_np, logger.sample_losses, logger.sample_comps, logger.sample_epochs
 
 

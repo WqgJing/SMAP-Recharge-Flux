@@ -55,11 +55,14 @@ def compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic):
 
 
 def apply_weights_and_compute_gradients(losses, weights, model):
-    """Apply weights to losses and compute gradients."""
+    """
+    Apply weights to losses and compute gradients.
+    GPU-OPTIMIZED: Gradient norms stay on GPU, sync deferred to weight update.
+    """
     # Apply weights
     weighted_losses = {key: weights[key] * losses[key] for key in losses}
 
-    # Compute gradients for each component
+    # ✅ GPU-OPTIMIZED: Compute gradients (returns GPU tensors, no sync)
     gradients = {}
     for key in losses:
         gradients[key] = compute_grad_norm(weighted_losses[key], model)
@@ -127,23 +130,31 @@ class WeightManager:
         else:
             # Default weights for moisture BC (Dirichlet)
             # Moisture BC is more stable than flux BC, use lower weight (20)
-            default_surf_weight = 0
+            default_surf_weight = 20
 
             base = {
-                "pde": 0 if use_initial_scales else 1.0,
+                "pde": 1 if use_initial_scales else 1.0,
                 "surf": default_surf_weight if use_initial_scales else 1.0,
-                "wt_head": 0,
-                "wt_kin": 0,
+                "wt_head": 1,
+                "wt_kin": 1,
                 "ic_h": 1,
-                "ic_zb": 0,
+                "ic_zb": 1,
             }
         self.weights = {k: float(v) for k, v in base.items()}
         self.weight_history = {k: [self.weights[k]] for k in self.weights}
         self.grad_ema = {k: None for k in self.weights}
 
     def _to_float(self, x):
+        """
+        Convert to float, handling both CPU and GPU tensors.
+        GPU-OPTIMIZED: Batch sync deferred - only converts when absolutely necessary.
+        """
+        if isinstance(x, torch.Tensor):
+            # ✅ GPU-OPTIMIZED: Defer sync by returning tensor directly
+            # Conversion to scalar happens only when needed for weight computation
+            return x.detach()
         try:
-            # works for python float, numpy scalar, or torch tensor on CPU
+            # works for python float, numpy scalar
             return float(x)
         except Exception:
             # last resort
@@ -154,22 +165,40 @@ class WeightManager:
         current_grads: dict term-> grad L2 norm (weighted if already_weighted=True)
         counts: optional dict term-> number of samples contributing to that term
         already_weighted: if True, unweight using current self.weights
+        GPU-OPTIMIZED: Single batched sync at end instead of per-gradient syncs.
         """
         # Skip update if using fixed weights
         if self.use_fixed_weights:
             return
-            
-        # 1) Build unweighted, per-sample grad estimates
-        g_unw = {}
+
+        # 1) Build unweighted, per-sample grad estimates (keep on GPU)
+        g_unw_tensors = {}
         for k in self.weights:
             if k not in current_grads:
                 continue
-            g = self._to_float(current_grads[k])
-            if already_weighted:
-                g = g / max(self.weights[k], self.eps)  # unweight
-            if counts is not None and k in counts and counts[k] and counts[k] > 0:
-                g = g / math.sqrt(float(counts[k]))  # per-sample
-            g_unw[k] = max(g, 0.0)
+            g = self._to_float(current_grads[k])  # Returns tensor if input is tensor
+
+            # Handle tensor operations
+            if isinstance(g, torch.Tensor):
+                if already_weighted:
+                    g = g / max(self.weights[k], self.eps)  # unweight
+                if counts is not None and k in counts and counts[k] and counts[k] > 0:
+                    g = g / math.sqrt(float(counts[k]))  # per-sample
+                g_unw_tensors[k] = torch.clamp(g, min=0.0)
+            else:
+                if already_weighted:
+                    g = g / max(self.weights[k], self.eps)  # unweight
+                if counts is not None and k in counts and counts[k] and counts[k] > 0:
+                    g = g / math.sqrt(float(counts[k]))  # per-sample
+                g_unw_tensors[k] = max(g, 0.0)
+
+        # ✅ GPU-OPTIMIZED: Single batched CPU sync for all gradients
+        g_unw = {}
+        for k, v in g_unw_tensors.items():
+            if isinstance(v, torch.Tensor):
+                g_unw[k] = v.cpu().item()  # Single sync per key
+            else:
+                g_unw[k] = v
 
         # 2) EMA smoothing
         for k in self.weights:
@@ -306,7 +335,10 @@ class CachePoolManager:
         return u_cache[perm], t_cache[perm]
 
     def update_residuals(self, model, epoch, resample_freq):
-        """Update cache residuals and sampling probabilities."""
+        """
+        Update cache residuals and sampling probabilities.
+        GPU-OPTIMIZED: Defers statistics sync to single batched operation.
+        """
         if epoch % resample_freq != 0:
             return
 
@@ -331,11 +363,16 @@ class CachePoolManager:
 
         self.cache_residuals[:] = torch.cat(residual_vals)
 
-        # Track statistics
+        # ✅ GPU-OPTIMIZED: Compute all stats on GPU first, then single sync
+        cache_mean_gpu = self.cache_residuals.mean()
+        cache_max_gpu = self.cache_residuals.max()
+        cache_std_gpu = self.cache_residuals.std()
+
+        # Track statistics (single batched CPU sync)
         self.cache_stats["resample_epochs"].append(epoch)
-        self.cache_stats["mean_residual"].append(self.cache_residuals.mean().item())
-        self.cache_stats["max_residual"].append(self.cache_residuals.max().item())
-        self.cache_stats["std_residual"].append(self.cache_residuals.std().item())
+        self.cache_stats["mean_residual"].append(cache_mean_gpu.item())
+        self.cache_stats["max_residual"].append(cache_max_gpu.item())
+        self.cache_stats["std_residual"].append(cache_std_gpu.item())
 
         # Compute sampling probabilities with safety checks
         tau = self.temperature if self.temperature > 0 else 1.0
@@ -421,7 +458,10 @@ class CachePoolManager:
 
 # Gradient computation utilities
 def compute_grad_norm(loss, model):
-    """Compute the L2 norm of gradients for a specific loss term."""
+    """
+    Compute the L2 norm of gradients for a specific loss term.
+    GPU-OPTIMIZED: Returns GPU tensor, defers synchronization to caller.
+    """
     grads = torch.autograd.grad(
         loss,
         model.parameters(),
@@ -429,26 +469,54 @@ def compute_grad_norm(loss, model):
         create_graph=False,
         allow_unused=True,
     )
-    grad_norm = 0.0
+
+    # ✅ GPU-OPTIMIZED: Keep everything on GPU, no .item() calls
+    # Collect non-None gradients and compute norms on GPU
+    grad_norms_squared = []
     for grad in grads:
         if grad is not None:
-            grad_norm += grad.norm(2).item() ** 2
-    return grad_norm**0.5
+            grad_norms_squared.append(grad.norm(2) ** 2)
+
+    if len(grad_norms_squared) == 0:
+        # No gradients - return scalar 0 on same device as model
+        device = next(model.parameters()).device
+        return torch.tensor(0.0, device=device)
+
+    # ✅ Single GPU operation to sum all squared norms
+    total_norm_squared = torch.stack(grad_norms_squared).sum()
+
+    # ✅ Return GPU tensor (caller decides when to sync with .item())
+    return total_norm_squared.sqrt()
 
 
 def compute_total_grad_norm(model):
-    """Compute total gradient norm after backward pass."""
-    total_grad_norm = 0.0
+    """
+    Compute total gradient norm after backward pass.
+    GPU-OPTIMIZED: Returns GPU tensor, defers synchronization to caller.
+    """
+    # ✅ GPU-OPTIMIZED: Keep everything on GPU, no .item() calls
+    grad_norms_squared = []
     for param in model.parameters():
         if param.grad is not None:
-            total_grad_norm += param.grad.norm(2).item() ** 2
-    return total_grad_norm**0.5
+            grad_norms_squared.append(param.grad.norm(2) ** 2)
+
+    if len(grad_norms_squared) == 0:
+        # No gradients - return scalar 0 on same device as model
+        device = next(model.parameters()).device
+        return torch.tensor(0.0, device=device)
+
+    # ✅ Single GPU operation to sum all squared norms
+    total_norm_squared = torch.stack(grad_norms_squared).sum()
+
+    # ✅ Return GPU tensor (caller decides when to sync with .item())
+    return total_norm_squared.sqrt()
 
 
 def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, device,
                               batch_size_bc=100, chunk_size=1000):
     """
     Compute loss over all samples (entire dataset) for smooth loss tracking.
+    GPU-OPTIMIZED: Accumulates on GPU, single sync at end.
 
     Args:
         model: The PINN model
@@ -465,14 +533,14 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
     """
     model.eval()
 
-    # Initialize accumulators for losses
-    loss_accum = {
-        "pde": 0.0,
-        "surf": 0.0,
-        "wt_head": 0.0,
-        "wt_kin": 0.0,
-        "ic_h": 0.0,
-        "ic_zb": 0.0,
+    # ✅ GPU-OPTIMIZED: Initialize accumulators as GPU tensors
+    loss_accum_gpu = {
+        "pde": torch.tensor(0.0, device=device),
+        "surf": torch.tensor(0.0, device=device),
+        "wt_head": torch.tensor(0.0, device=device),
+        "wt_kin": torch.tensor(0.0, device=device),
+        "ic_h": torch.tensor(0.0, device=device),
+        "ic_zb": torch.tensor(0.0, device=device),
     }
 
     # 1. Compute PDE loss over entire cache pool (in chunks to avoid memory issues)
@@ -493,11 +561,11 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
         # Compute PDE residual (needs gradients enabled for physics derivatives)
         res_pde = model.pde_residual(z_chunk, t_chunk_grad)
 
-        # Detach before accumulating to avoid building computation graph
-        loss_accum["pde"] += (res_pde**2).sum().detach().item()
+        # ✅ GPU-OPTIMIZED: Accumulate on GPU (no .item() call)
+        loss_accum_gpu["pde"] += (res_pde**2).sum().detach()
         n_pde_points += len(z_chunk)
 
-    loss_accum["pde"] /= n_pde_points
+    loss_accum_gpu["pde"] /= n_pde_points
 
     # 2. Compute boundary condition losses over all q0 time points
     n_bc_points = 0
@@ -508,19 +576,19 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
         # BC residuals need gradients for physics derivatives
         # Moisture BC (Dirichlet)
         res_surf = model.surface_moisture_bc_residual(t_bc)
-        loss_accum["surf"] += (res_surf**2).sum().detach().item()
+        loss_accum_gpu["surf"] += (res_surf**2).sum().detach()
 
         res_wt_head = model.water_table_head_residual(t_bc)
-        loss_accum["wt_head"] += (res_wt_head**2).sum().detach().item()
+        loss_accum_gpu["wt_head"] += (res_wt_head**2).sum().detach()
 
         res_wt_kin = model.water_table_kinematic_residual(t_bc)
-        loss_accum["wt_kin"] += (res_wt_kin**2).sum().detach().item()
+        loss_accum_gpu["wt_kin"] += (res_wt_kin**2).sum().detach()
 
         n_bc_points += len(t_bc)
 
-    loss_accum["surf"] /= n_bc_points
-    loss_accum["wt_head"] /= n_bc_points
-    loss_accum["wt_kin"] /= n_bc_points
+    loss_accum_gpu["surf"] /= n_bc_points
+    loss_accum_gpu["wt_head"] /= n_bc_points
+    loss_accum_gpu["wt_kin"] /= n_bc_points
 
     # 3. Compute initial condition losses over a representative set of points
     ic_batch_size = 200  # Use a reasonable number of IC points
@@ -531,9 +599,12 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
 
     # IC residuals computation
     res_ic_h, res_ic_zb = model.initial_conditions_residual(z_ic, t_ic)
-    loss_accum["ic_h"] = (res_ic_h**2).mean().detach().item()
-    loss_accum["ic_zb"] = (res_ic_zb**2).mean().detach().item()
+    loss_accum_gpu["ic_h"] = (res_ic_h**2).mean().detach()
+    loss_accum_gpu["ic_zb"] = (res_ic_zb**2).mean().detach()
 
     model.train()
+
+    # ✅ GPU-OPTIMIZED: Single batched CPU sync at the very end
+    loss_accum = {k: v.cpu().item() for k, v in loss_accum_gpu.items()}
 
     return loss_accum

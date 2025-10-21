@@ -114,11 +114,8 @@ def gradient_based_sampling(
     all_samples = []
 
     # ===== PART 1: Gradient-Interpolated Samples (SPIKE-FOCUSED) =====
+    # ✅ GPU-OPTIMIZED: Fully vectorized - no Python loops, no .item() calls
     if use_interpolation and n_interp_samples > 0:
-        interpolated_times = []
-        interval_weights = []  # Track which intervals contribute samples
-
-        # For each interval between adjacent data points
         gradient_magnitudes = torch.abs(gradients)
 
         # Calculate threshold: only intervals above this percentile get interpolated
@@ -129,65 +126,34 @@ def gradient_based_sampling(
         high_grad_indices = torch.where(high_grad_mask)[0]
 
         if len(high_grad_indices) > 0:
-            # Get only the high-gradient magnitudes for relative scaling
+            # ✅ Vectorized: Sample intervals weighted by gradient magnitude
             high_grad_mags = gradient_magnitudes[high_grad_indices]
-            max_grad = high_grad_mags.max().item()
-            min_grad = high_grad_mags.min().item()
+            interval_weights = high_grad_mags.pow(power)
+            interval_weights = interval_weights / interval_weights.sum()
 
-            for idx in high_grad_indices:
-                i = idx.item()
-                t_start = times_flat[i].item()
-                t_end = times_flat[i + 1].item()
-                grad_mag = gradient_magnitudes[i].item()
+            # Sample intervals (with replacement to get n_interp_samples total points)
+            # Each interval gets samples proportional to its gradient magnitude
+            sampled_interval_indices = torch.multinomial(
+                interval_weights,
+                n_interp_samples,
+                replacement=True
+            )
 
-                # Number of interpolated points proportional to gradient magnitude
-                # ONLY among high-gradient intervals (baseline excluded entirely)
-                min_interp = 2   # Minimum points for qualifying high-gradient intervals
-                max_interp = 50  # Maximum points for highest gradient intervals
+            # ✅ Vectorized: Generate random interpolation positions within intervals
+            # alpha ∈ [0, 1] for each sample
+            alpha = torch.rand(n_interp_samples, device=device)
 
-                if max_grad > min_grad:
-                    # Scale within high-gradient range only
-                    normalized_grad = (grad_mag - min_grad) / (max_grad - min_grad)
-                    n_interp = int(min_interp + (max_interp - min_interp) * normalized_grad)
-                else:
-                    n_interp = min_interp
+            # Get start and end times for sampled intervals
+            interval_idx = high_grad_indices[sampled_interval_indices]
+            t_start = times_flat[interval_idx]
+            t_end = times_flat[interval_idx + 1]
 
-                # Create interpolated points in this high-gradient interval
-                if n_interp > 0:
-                    interp_times = torch.linspace(t_start, t_end, n_interp + 2, device=device)[1:-1]
-                    interpolated_times.append(interp_times)
-
-                    # Weight for this interval (use power to further emphasize extremes)
-                    interval_weight = torch.ones(len(interp_times), device=device) * (grad_mag ** power)
-                    interval_weights.append(interval_weight)
-
-        # Combine all interpolated points
-        if len(interpolated_times) > 0:
-            all_interp_times = torch.cat(interpolated_times)
-            all_interp_weights = torch.cat(interval_weights)
-
-            # Normalize weights for sampling
-            all_interp_weights = all_interp_weights / all_interp_weights.sum()
-
-            # Sample from interpolated points
-            if len(all_interp_times) >= n_interp_samples:
-                sampled_idx = torch.multinomial(
-                    all_interp_weights,
-                    n_interp_samples,
-                    replacement=False
-                )
-            else:
-                # Not enough interpolated points, sample with replacement
-                sampled_idx = torch.multinomial(
-                    all_interp_weights,
-                    n_interp_samples,
-                    replacement=True
-                )
-
-            interp_samples = all_interp_times[sampled_idx].reshape(-1, 1)
-            all_samples.append(interp_samples)
+            # ✅ Vectorized interpolation: t = t_start + alpha * (t_end - t_start)
+            interp_samples = t_start + alpha * (t_end - t_start)
+            all_samples.append(interp_samples.reshape(-1, 1))
 
     # ===== PART 2: Neighbor Samples =====
+    # ✅ GPU-OPTIMIZED: Fully vectorized - no Python loops, sets, or .item() calls
     if n_neighbor_samples > 0:
         # Identify high-gradient intervals
         gradient_magnitudes = torch.abs(gradients)
@@ -195,32 +161,36 @@ def gradient_based_sampling(
         high_grad_mask = gradient_magnitudes >= high_grad_threshold_val
         high_grad_indices = torch.where(high_grad_mask)[0]
 
-        # Collect neighbor indices around high-gradient intervals
-        neighbor_indices_set = set()
-        for idx in high_grad_indices:
-            idx_val = idx.item()
-            # Add neighbors on both sides of the interval
-            for offset in range(-neighbor_expansion, neighbor_expansion + 1):
-                neighbor_idx = idx_val + offset
-                if 0 <= neighbor_idx < n_points:
-                    neighbor_indices_set.add(neighbor_idx)
+        # ✅ Vectorized neighbor collection using tensor broadcasting
+        if len(high_grad_indices) > 0:
+            # Create offset tensor [-expansion, ..., 0, ..., +expansion]
+            offsets = torch.arange(-neighbor_expansion, neighbor_expansion + 1, device=device)
 
-        if len(neighbor_indices_set) > 0:
-            neighbor_indices = torch.tensor(list(neighbor_indices_set), device=device)
+            # Broadcast: [num_high_grad, 1] + [1, num_offsets] = [num_high_grad, num_offsets]
+            neighbor_candidates = high_grad_indices.unsqueeze(1) + offsets.unsqueeze(0)
 
-            # Sample from neighbors
-            if len(neighbor_indices) >= n_neighbor_samples:
-                sampled_neighbor_idx = neighbor_indices[
-                    torch.randperm(len(neighbor_indices), device=device)[:n_neighbor_samples]
-                ]
-            else:
-                # Sample with replacement if not enough neighbors
-                sampled_neighbor_idx = neighbor_indices[
-                    torch.randint(0, len(neighbor_indices), (n_neighbor_samples,), device=device)
-                ]
+            # Flatten and filter valid indices [0, n_points)
+            neighbor_indices = neighbor_candidates.flatten()
+            valid_mask = (neighbor_indices >= 0) & (neighbor_indices < n_points)
+            neighbor_indices = neighbor_indices[valid_mask]
 
-            neighbor_samples = times_flat[sampled_neighbor_idx].reshape(-1, 1)
-            all_samples.append(neighbor_samples)
+            # ✅ Remove duplicates using unique() - GPU operation, no Python sets
+            neighbor_indices = torch.unique(neighbor_indices)
+
+            if len(neighbor_indices) > 0:
+                # Sample from neighbors
+                if len(neighbor_indices) >= n_neighbor_samples:
+                    sampled_neighbor_idx = neighbor_indices[
+                        torch.randperm(len(neighbor_indices), device=device)[:n_neighbor_samples]
+                    ]
+                else:
+                    # Sample with replacement if not enough neighbors
+                    sampled_neighbor_idx = neighbor_indices[
+                        torch.randint(0, len(neighbor_indices), (n_neighbor_samples,), device=device)
+                    ]
+
+                neighbor_samples = times_flat[sampled_neighbor_idx].reshape(-1, 1)
+                all_samples.append(neighbor_samples)
 
     # ===== PART 3: Baseline Samples =====
     if n_baseline_samples > 0:
@@ -251,12 +221,12 @@ def gradient_based_sampling(
     perm = torch.randperm(len(t_bc), device=device)
     t_bc = t_bc[perm].clone().requires_grad_(True)
 
-    # Diagnostic info
+    # ✅ GPU-OPTIMIZED: Keep diagnostic tensors on GPU, defer .item() until needed
     sample_info = {
         'gradient_weights': gradient_weights,
         'gradients': gradients,
-        'max_gradient': gradients.abs().max().item(),
-        'mean_gradient': gradients.abs().mean().item(),
+        'max_gradient': gradients.abs().max(),  # ✅ Keep as tensor
+        'mean_gradient': gradients.abs().mean(),  # ✅ Keep as tensor
         'used_interpolation': use_interpolation,
         'n_interp_samples': n_interp_samples,
         'n_neighbor_samples': n_neighbor_samples,

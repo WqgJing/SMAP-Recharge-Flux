@@ -376,9 +376,41 @@ class RichardsPINN(nn.Module):
         
         return dzb_dt_tilde - q_wt_tilde / self.Sy_tilde
 
+    def _torch_interp_1d(self, x, xp, fp):
+        """
+        GPU-optimized 1D linear interpolation (replacement for np.interp)
+
+        Args:
+            x: Query points (1D tensor)
+            xp: Data point x-coordinates (1D tensor, must be sorted)
+            fp: Data point y-coordinates (1D tensor, same length as xp)
+
+        Returns:
+            Interpolated values at query points x
+        """
+        # Handle edge cases: extrapolate with boundary values (like np.interp)
+        x_clamped = torch.clamp(x, xp[0], xp[-1])
+
+        # Use searchsorted for GPU-accelerated binary search
+        indices = torch.searchsorted(xp, x_clamped)
+        indices = torch.clamp(indices, 1, len(xp) - 1)
+
+        # Get surrounding points
+        x0 = xp[indices - 1]
+        x1 = xp[indices]
+        y0 = fp[indices - 1]
+        y1 = fp[indices]
+
+        # Linear interpolation: y = y0 + (x - x0) * (y1 - y0) / (x1 - x0)
+        alpha = (x_clamped - x0) / (x1 - x0 + 1e-12)
+        y_interp = y0 + alpha * (y1 - y0)
+
+        return y_interp
+
     def initial_conditions_residual(self, z, t0):
         """
         Dimensionless initial conditions - uses measured profile if provided, else hydrostatic
+        GPU-OPTIMIZED: All operations stay on GPU (no NumPy/CPU transfers)
 
         Args:
             z: DIMENSIONAL spatial coordinate [m]
@@ -397,52 +429,53 @@ class RichardsPINN(nn.Module):
         # Determine IC based on ic_type
         if self.ic_type == 'obs' and self.ic_profile is not None:
             # Option 1: Use measured profile with linear extrapolation to water table
-            z_measured = self.ic_profile['z']
-            h_measured = self.ic_profile['h']
+            # ✅ GPU-OPTIMIZED: All operations stay on GPU
+            z_measured = self.ic_profile['z']  # Already on GPU
+            h_measured = self.ic_profile['h']  # Already on GPU
 
-            import numpy as np
-            z_np = z.detach().cpu().numpy().flatten()
-            z_meas_np = z_measured.cpu().numpy()
-            h_meas_np = h_measured.cpu().numpy()
-
-            # Get initial water table depth (dimensional)
-            zb_ic_dim = self.normalizer.denormalize_zb(torch.tensor(self.zb_initial_tilde, device=z.device)).cpu().numpy()
+            # Get initial water table depth (dimensional) - stay on GPU
+            zb_ic_dim = self.normalizer.denormalize_zb(
+                torch.tensor(self.zb_initial_tilde, device=z.device)
+            )
 
             # Extend measured profile to water table
             # Water table point: h(z=-zb) = 0
-            z_wt = -zb_ic_dim
-            h_wt = 0.0
+            z_wt = -zb_ic_dim.view(-1)
+            h_wt = torch.zeros_like(z_wt)
 
-            # Extended profile: measurements + water table point
-            z_extended = np.append(z_meas_np, z_wt)
-            h_extended = np.append(h_meas_np, h_wt)
+            # Extended profile: measurements + water table point (GPU tensors)
+            z_extended = torch.cat([z_measured, z_wt])
+            h_extended = torch.cat([h_measured, h_wt])
 
-            # Sort by z (most negative to least negative)
-            sort_idx = np.argsort(z_extended)
-            z_extended = z_extended[sort_idx]
-            h_extended = h_extended[sort_idx]
+            # Sort by z (most negative to least negative) - GPU operation
+            sort_idx = torch.argsort(z_extended)
+            z_extended_sorted = z_extended[sort_idx]
+            h_extended_sorted = h_extended[sort_idx]
 
-            # Linear interpolation over full range (measurements to water table)
-            h_ic_interp = np.interp(z_np, z_extended, h_extended)
-            h_ic = torch.tensor(h_ic_interp, dtype=torch.float32, device=z.device).view_as(z)
+            # ✅ GPU-native linear interpolation (replacement for np.interp)
+            z_flat = z.flatten()
+            h_ic_interp = self._torch_interp_1d(z_flat, z_extended_sorted, h_extended_sorted)
+            h_ic = h_ic_interp.view_as(z)
 
             # Normalize to dimensionless
             h_ic_tilde = self.normalizer.normalize_h(h_ic)
 
         elif self.ic_type == 'linear' and self.ic_profile is not None:
             # Option 2: Linear from surface h_obs to water table h=0
-            # Get surface h value (shallowest measurement, z closest to 0)
-            h_surface = self.ic_profile['h'][self.ic_profile['z'].argmax()].cpu().numpy()
+            # ✅ GPU-OPTIMIZED: All operations stay on GPU
 
-            # Get initial water table depth (dimensional)
-            zb_ic_dim = self.normalizer.denormalize_zb(torch.tensor(self.zb_initial_tilde, device=z.device)).cpu().numpy()
+            # Get surface h value (shallowest measurement, z closest to 0)
+            h_surface = self.ic_profile['h'][self.ic_profile['z'].argmax()]
+
+            # Get initial water table depth (dimensional) - stay on GPU
+            zb_ic_dim = self.normalizer.denormalize_zb(
+                torch.tensor(self.zb_initial_tilde, device=z.device)
+            )
 
             # Linear profile: h(z) = h_surface * (1 + z/zb_ic)
             # At z=0: h = h_surface
             # At z=-zb_ic: h = 0
-            z_np = z.detach().cpu().numpy().flatten()
-            h_ic_linear = h_surface * (1.0 + z_np / zb_ic_dim)
-            h_ic = torch.tensor(h_ic_linear, dtype=torch.float32, device=z.device).view_as(z)
+            h_ic = h_surface * (1.0 + z / zb_ic_dim)
 
             # Normalize to dimensionless
             h_ic_tilde = self.normalizer.normalize_h(h_ic)
