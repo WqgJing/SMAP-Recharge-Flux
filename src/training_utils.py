@@ -127,15 +127,15 @@ class WeightManager:
         else:
             # Default weights for moisture BC (Dirichlet)
             # Moisture BC is more stable than flux BC, use lower weight (20)
-            default_surf_weight = 50
+            default_surf_weight = 0
 
             base = {
-                "pde": 1 if use_initial_scales else 1.0,
+                "pde": 0 if use_initial_scales else 1.0,
                 "surf": default_surf_weight if use_initial_scales else 1.0,
-                "wt_head": 1,
-                "wt_kin": 1,
+                "wt_head": 0,
+                "wt_kin": 0,
                 "ic_h": 1,
-                "ic_zb": 1,
+                "ic_zb": 0,
             }
         self.weights = {k: float(v) for k, v in base.items()}
         self.weight_history = {k: [self.weights[k]] for k in self.weights}
