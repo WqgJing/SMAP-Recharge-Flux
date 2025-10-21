@@ -6,10 +6,14 @@ import time
 
 
 class TrainingLogger:
-    """Handles logging and statistics for PINN training with file-based logging."""
+    """
+    Handles logging and statistics for PINN training with file-based logging.
+    GPU-OPTIMIZED: Stores GPU tensors during training, converts on-demand for export.
+    """
 
     def __init__(self, log_dir=None, experiment_name=None, hyperparams=None):
         # In-memory storage (existing functionality)
+        # ✅ GPU-OPTIMIZED: Lists may contain GPU tensors (converted on-demand)
         self.losses = []
         self.comps = {
             "pde": [],
@@ -72,6 +76,34 @@ class TrainingLogger:
             "gradient_norms": [],
         }
 
+    def _to_numpy(self, data_list):
+        """
+        Convert list of mixed tensors/floats to numpy array.
+        GPU-OPTIMIZED: Single batched conversion for export/plotting.
+        """
+        import torch
+        import numpy as np
+
+        result = []
+        for x in data_list:
+            if isinstance(x, torch.Tensor):
+                result.append(x.detach().cpu().item())
+            else:
+                result.append(x)
+        return np.array(result)
+
+    def get_losses_numpy(self):
+        """Get losses as numpy array (for plotting/export)."""
+        return self._to_numpy(self.losses)
+
+    def get_comps_numpy(self):
+        """Get loss components as dict of numpy arrays (for plotting/export)."""
+        return {k: self._to_numpy(v) for k, v in self.comps.items()}
+
+    def get_grads_numpy(self):
+        """Get gradients as dict of numpy arrays (for plotting/export)."""
+        return {k: self._to_numpy(v) for k, v in self.grads.items()}
+
     def _setup_file_logging(self):
         """Setup file logging directory and files."""
         # Create experiment directory
@@ -118,15 +150,37 @@ class TrainingLogger:
         self.epoch_start_time = time.time()
 
     def record_losses(self, total_loss, loss_dict):
-        """Record loss values (existing functionality)."""
-        self.losses.append(total_loss.item())
+        """
+        Record loss values (existing functionality).
+        GPU-OPTIMIZED: Defers CPU sync - stores GPU tensors, converts on-demand.
+        """
+        import torch
+        # ✅ GPU-OPTIMIZED: Store tensors directly, defer .item() until needed
+        if isinstance(total_loss, torch.Tensor):
+            self.losses.append(total_loss.detach())
+        else:
+            self.losses.append(total_loss)
+
         for key in self.comps:
-            self.comps[key].append(loss_dict[key].item())
+            val = loss_dict[key]
+            if isinstance(val, torch.Tensor):
+                self.comps[key].append(val.detach())
+            else:
+                self.comps[key].append(val)
 
     def record_gradients(self, grad_dict):
-        """Record gradient norms (existing functionality)."""
+        """
+        Record gradient norms.
+        GPU-OPTIMIZED: Stores GPU tensors directly, defers conversion.
+        """
+        import torch
         for key in grad_dict:
-            self.grads[key].append(grad_dict[key])
+            # ✅ GPU-OPTIMIZED: Store tensors directly, defer .item() until needed
+            val = grad_dict[key]
+            if isinstance(val, torch.Tensor):
+                self.grads[key].append(val.detach())
+            else:
+                self.grads[key].append(val)
 
     def record_sample_losses(self, epoch, loss_dict, weights):
         """Record sample losses computed over the full dataset."""
@@ -168,17 +222,26 @@ class TrainingLogger:
             
         self.training_metrics["learning_rates"].append(learning_rate)
 
-    def log_epoch(self, epoch, total_loss, loss_dict, grad_dict, weights, 
+    def log_epoch(self, epoch, total_loss, loss_dict, grad_dict, weights,
                   cache_manager=None, learning_rate=None):
-        """Log complete epoch information to file."""
+        """
+        Log complete epoch information to file.
+        GPU-OPTIMIZED: Batches all tensor conversions together.
+        """
         if not self.log_dir:
             return
-            
+
+        import torch
+
+        # Helper to convert tensor to float
+        def to_float(x):
+            return x.detach().cpu().item() if isinstance(x, torch.Tensor) else x
+
         # Calculate timing
         current_time = time.time()
         elapsed_time = current_time - self.start_time
         epoch_time = current_time - self.epoch_start_time if hasattr(self, 'epoch_start_time') else None
-        
+
         # Get cache stats
         cache_mean = cache_max = cache_std = None
         if cache_manager and hasattr(cache_manager, 'cache_stats'):
@@ -189,26 +252,31 @@ class TrainingLogger:
                 cache_max = stats["max_residual"][-1]
             if stats["std_residual"]:
                 cache_std = stats["std_residual"][-1]
-        
+
+        # ✅ GPU-OPTIMIZED: Batch all tensor conversions
+        total_loss_val = to_float(total_loss)
+        loss_vals = {k: to_float(v) for k, v in loss_dict.items()}
+        grad_vals = {k: to_float(v) for k, v in grad_dict.items()}
+
         # Prepare CSV row
         row = {
             "epoch": epoch,
             "timestamp": datetime.fromtimestamp(current_time).isoformat(),
             "elapsed_time": elapsed_time,
-            "total_loss": total_loss.item(),
-            "pde_loss": loss_dict["pde"].item(),
-            "surf_loss": loss_dict["surf"].item(),
-            "wt_head_loss": loss_dict["wt_head"].item(),
-            "wt_kin_loss": loss_dict["wt_kin"].item(),
-            "ic_h_loss": loss_dict["ic_h"].item(),
-            "ic_zb_loss": loss_dict["ic_zb"].item(),
-            "pde_grad": grad_dict["pde"],
-            "surf_grad": grad_dict["surf"],
-            "wt_head_grad": grad_dict["wt_head"],
-            "wt_kin_grad": grad_dict["wt_kin"],
-            "ic_h_grad": grad_dict["ic_h"],
-            "ic_zb_grad": grad_dict["ic_zb"],
-            "total_grad": grad_dict["total"],
+            "total_loss": total_loss_val,
+            "pde_loss": loss_vals["pde"],
+            "surf_loss": loss_vals["surf"],
+            "wt_head_loss": loss_vals["wt_head"],
+            "wt_kin_loss": loss_vals["wt_kin"],
+            "ic_h_loss": loss_vals["ic_h"],
+            "ic_zb_loss": loss_vals["ic_zb"],
+            "pde_grad": grad_vals["pde"],
+            "surf_grad": grad_vals["surf"],
+            "wt_head_grad": grad_vals["wt_head"],
+            "wt_kin_grad": grad_vals["wt_kin"],
+            "ic_h_grad": grad_vals["ic_h"],
+            "ic_zb_grad": grad_vals["ic_zb"],
+            "total_grad": grad_vals["total"],
             "pde_weight": weights["pde"],
             "surf_weight": weights["surf"],
             "wt_head_weight": weights["wt_head"],
@@ -221,7 +289,7 @@ class TrainingLogger:
             "learning_rate": learning_rate,
             "epoch_time": epoch_time
         }
-        
+
         # Write to CSV
         with open(self.csv_file, 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
@@ -297,30 +365,44 @@ class TrainingLogger:
         weights,
         cache_manager=None,
     ):
-        """Print training progress."""
+        """
+        Print training progress.
+        GPU-OPTIMIZED: Batches all CPU syncs together for printing.
+        """
+        import torch
+
+        # Helper to convert tensor to float
+        def to_float(x):
+            return x.detach().cpu().item() if isinstance(x, torch.Tensor) else x
+
+        # ✅ GPU-OPTIMIZED: Batch all conversions together
+        total_loss_val = to_float(total_loss)
+        loss_vals = {k: to_float(v) for k, v in loss_dict.items()}
+        grad_vals = {k: to_float(v) for k, v in grad_dict.items()}
+
         print(f"\n[{epoch+1:4d}/{n_epochs}]")
-        print(f"  Losses: total={total_loss.item():.3e}")
+        print(f"  Losses: total={total_loss_val:.3e}")
         print(
-            f"    PDE={loss_dict['pde'].item():.3e}, "
-            f"Surf={loss_dict['surf'].item():.3e}"
+            f"    PDE={loss_vals['pde']:.3e}, "
+            f"Surf={loss_vals['surf']:.3e}"
         )
         print(
-            f"    WT(h)={loss_dict['wt_head'].item():.3e}, "
-            f"WT(kin)={loss_dict['wt_kin'].item():.3e}"
+            f"    WT(h)={loss_vals['wt_head']:.3e}, "
+            f"WT(kin)={loss_vals['wt_kin']:.3e}"
         )
         print(
-            f"    IC(h)={loss_dict['ic_h'].item():.3e}, "
-            f"IC(zb)={loss_dict['ic_zb'].item():.3e}"
+            f"    IC(h)={loss_vals['ic_h']:.3e}, "
+            f"    IC(zb)={loss_vals['ic_zb']:.3e}"
         )
 
         print(f"  Weighted Gradients (L2 norm):")
-        print(f"    PDE={grad_dict['pde']:.3e}, Surf={grad_dict['surf']:.3e}")
+        print(f"    PDE={grad_vals['pde']:.3e}, Surf={grad_vals['surf']:.3e}")
         print(
-            f"    WT(h)={grad_dict['wt_head']:.3e}, "
-            f"WT(kin)={grad_dict['wt_kin']:.3e}"
+            f"    WT(h)={grad_vals['wt_head']:.3e}, "
+            f"WT(kin)={grad_vals['wt_kin']:.3e}"
         )
-        print(f"    IC(h)={grad_dict['ic_h']:.3e}, IC(zb)={grad_dict['ic_zb']:.3e}")
-        print(f"    Total={grad_dict['total']:.3e}")
+        print(f"    IC(h)={grad_vals['ic_h']:.3e}, IC(zb)={grad_vals['ic_zb']:.3e}")
+        print(f"    Total={grad_vals['total']:.3e}")
 
         print(f"  Current weights:")
         for key in weights:
@@ -331,9 +413,18 @@ class TrainingLogger:
             cache_manager.print_stats(epoch)
 
     def print_final_summary(self, total_grad_norm, weights, cache_manager=None):
-        """Print final training summary."""
+        """
+        Print final training summary.
+        GPU-OPTIMIZED: Handles GPU tensors in total_grad_norm.
+        """
+        import torch
+
+        # Helper to convert tensor to float
+        def to_float(x):
+            return x.detach().cpu().item() if isinstance(x, torch.Tensor) else x
+
         print("\nTraining done.")
-        print(f"Final gradient norms: Total={total_grad_norm:.3e}")
+        print(f"Final gradient norms: Total={to_float(total_grad_norm):.3e}")
         print(f"Final weights:")
         for key in weights:
             print(f"  {key}: {weights[key]:.3e}")
