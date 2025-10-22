@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, device='cpu'):
+def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, device='cpu', obs_data=None):
     """
-    Comprehensive plotting with 5 subplots - NORMALIZED VERSION
+    Comprehensive plotting with 6 subplots - NORMALIZED VERSION
 
     Args:
         model: Trained PINN model
@@ -14,6 +14,8 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
         n_t: Number of time points for visualization grid
         n_z: Number of depth points for visualization grid
         device: Device for computation
+        obs_data: Optional dictionary with observation data at different depths
+                 Format: {'times': array, 'depths': [z1, z2, ...], 'theta': [theta1, theta2, ...]}
     """
     model.eval()
 
@@ -115,9 +117,9 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
         h_at_wt, _ = model.predict_head(z_wt, t_wt)
     h_at_wt = h_at_wt.cpu().numpy().flatten()
 
-    # Create the 5-subplot figure
+    # Create the 6-subplot figure
     fig, axs = plt.subplots(2, 3, figsize=(20, 10))
-    fig.suptitle("PINN Results Analysis", fontsize=16, fontweight="bold")
+    fig.suptitle("PINN Results Analysis (6 Subplots)", fontsize=16, fontweight="bold")
 
     # Subplot 1: h(z,t) 2D colormap
     im1 = axs[0, 0].pcolormesh(
@@ -228,8 +230,50 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
     axs[1, 1].legend()
     axs[1, 1].grid(True, alpha=0.3)
 
-    # Hide unused subplot
-    axs[1, 2].axis("off")
+    # Subplot 6: Theta validation at observation depths
+    if obs_data is not None:
+        obs_times = obs_data['times']  # Time in seconds
+        obs_depths = obs_data['depths']  # List of depths in meters (negative)
+        obs_theta_series = obs_data['theta']  # List of theta arrays, one per depth
+
+        colors = ['#e41a1c', '#ff7f00', '#ffff33', '#4daf4a', '#377eb8', '#984ea3']
+
+        for i, (z_obs, theta_obs) in enumerate(zip(obs_depths, obs_theta_series)):
+            # Get PINN predictions at this depth over time
+            n_obs = len(obs_times)
+            z_obs_tensor = torch.full((n_obs, 1), z_obs, dtype=torch.float32).to(device)
+            t_obs_tensor = torch.tensor(obs_times, dtype=torch.float32).view(-1, 1).to(device)
+
+            with torch.no_grad():
+                h_pinn, _ = model.predict_head(z_obs_tensor, t_obs_tensor)
+
+                # Convert h → Se using normalized space
+                h_tilde = model.normalizer.normalize_h(h_pinn)
+                Se_pinn = model.normalizer.Se_tilde(h_tilde)
+
+                # Convert Se → theta: θ = θr + Se × (θs - θr)
+                theta_pinn = (soil_params['theta_r'] +
+                             Se_pinn.cpu().numpy().flatten() *
+                             (soil_params['theta_s'] - soil_params['theta_r']))
+
+            # Convert time to days
+            t_days = obs_times / 86400.0
+
+            # Plot both observed and PINN-derived theta
+            depth_cm = int(abs(z_obs) * 100)
+            axs[1, 2].plot(t_days, theta_obs, color=colors[i % len(colors)],
+                          linewidth=2, alpha=0.7, label=f'{depth_cm}cm obs')
+            axs[1, 2].plot(t_days, theta_pinn, color=colors[i % len(colors)],
+                          linewidth=1.5, linestyle='--', alpha=0.9, label=f'{depth_cm}cm PINN')
+
+        axs[1, 2].set_title("θ Validation: Obs vs PINN")
+        axs[1, 2].set_xlabel("Time [days]")
+        axs[1, 2].set_ylabel("θ [m³/m³]")
+        axs[1, 2].legend(fontsize=8, ncol=2)
+        axs[1, 2].grid(True, alpha=0.3)
+    else:
+        # Hide unused subplot if no observation data provided
+        axs[1, 2].axis("off")
 
     plt.tight_layout()
     plt.show()
@@ -241,6 +285,34 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
     print(f"h(-zb(t), t) range: {h_at_wt.min():.6f} to {h_at_wt.max():.6f} m")
     print(f"Max |h(-zb(t), t)|: {np.max(np.abs(h_at_wt)):.6f} m (should be close to 0)")
     print(f"Max IC error: {np.max(np.abs(h_ic_modeled - h_ic_prescribed)):.6f} m")
+
+    # Print theta validation statistics if available
+    if obs_data is not None:
+        print("\nTheta Validation Statistics:")
+        for i, (z_obs, theta_obs) in enumerate(zip(obs_data['depths'], obs_data['theta'])):
+            # Recompute theta_pinn for statistics
+            n_obs = len(obs_data['times'])
+            z_obs_tensor = torch.full((n_obs, 1), z_obs, dtype=torch.float32).to(device)
+            t_obs_tensor = torch.tensor(obs_data['times'], dtype=torch.float32).view(-1, 1).to(device)
+
+            with torch.no_grad():
+                h_pinn, _ = model.predict_head(z_obs_tensor, t_obs_tensor)
+                h_tilde = model.normalizer.normalize_h(h_pinn)
+                Se_pinn = model.normalizer.Se_tilde(h_tilde)
+                theta_pinn = (soil_params['theta_r'] +
+                             Se_pinn.cpu().numpy().flatten() *
+                             (soil_params['theta_s'] - soil_params['theta_r']))
+
+            # Remove NaN values for comparison
+            valid_mask = ~np.isnan(theta_obs)
+            theta_obs_valid = theta_obs[valid_mask]
+            theta_pinn_valid = theta_pinn[valid_mask]
+
+            if len(theta_obs_valid) > 0:
+                rmse = np.sqrt(np.mean((theta_pinn_valid - theta_obs_valid)**2))
+                mae = np.mean(np.abs(theta_pinn_valid - theta_obs_valid))
+                depth_cm = int(abs(z_obs) * 100)
+                print(f"  {depth_cm:3d}cm: RMSE = {rmse:.6f} m³/m³, MAE = {mae:.6f} m³/m³")
 
 
 def plot_training_losses(losses_pool, comps_pool, sample_losses=None, sample_comps=None, sample_epochs=None):
