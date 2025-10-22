@@ -32,6 +32,6 @@ nvidia-smi
 # Pass run name as first argument (default: 'default_run')
 RUN_NAME="${1:-default_run}"
 echo "Run name: $RUN_NAME"
-python3 -u train_forward_pinn.py "$RUN_NAME"
+python3 -u train_with_config.py "$RUN_NAME"
 
 echo "End time: $(date)"

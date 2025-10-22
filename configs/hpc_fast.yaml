@@ -1,0 +1,75 @@
+# ============================================================================
+# HPC FAST CONFIGURATION - Optimized for GPU clusters
+# ============================================================================
+# Uses mixed precision (AMP), large batches, gradient accumulation.
+# Designed for maximum throughput on HPC systems.
+
+data:
+  path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
+  start_date: '2017-05-19'
+  end_date: '2017-05-26'
+  interpolate: true
+  max_gap_hours: 6
+
+soil:
+  theta_s: 0.40
+  theta_r: 0.01
+  alpha: 3.4
+  n: 1.7
+  Ks: 1.0e-5
+  l: 0.50
+
+training:
+  n_epochs: 500000
+  learning_rate: 2.0e-4      # Higher LR for larger effective batch
+  device: 'auto'
+  seed: 44
+
+network:
+  h_net:
+    hidden_dim: 64
+    num_layers: 4
+  zb_net:
+    hidden_dim: 32
+    num_layers: 3
+
+sampling:
+  cache_size: 100000         # Larger cache for GPU
+  batch_size: 8000           # Larger batch for GPU throughput
+  resample_freq: 100
+  boundary_ratio: 0.7
+  high_residual_ratio: 0.6
+  temperature: 0.3
+
+boundary_sampling:
+  batch_size_bc: 300
+  interp_ratio: 0.30
+  neighbor_ratio: 0.00
+  baseline_ratio: 0.70
+  neighbor_expansion: 0
+  gradient_threshold: 0.7
+  power: 2.0
+
+optimization:
+  weight_update_freq: 10000000000
+  weight_lr: 0.1
+  use_initial_scales: true
+  use_amp: true              # Enable mixed precision (30-50% faster)
+  use_multi_gpu: true        # Use all available GPUs
+  grad_accumulation_steps: 2 # Effective batch = 8000 * 2 = 16000
+
+checkpointing:
+  dir: 'checkpoints_hpc'
+  freq: 10000                # Less frequent on HPC (faster I/O)
+  keep_last_n: 5
+
+physics:
+  Sy: 0.3
+  zr: 0.5
+  L: 4.0
+  S_max: 1.0e-7
+  zb_initial: 6.1
+  ic_type: 'hydrostatic'
+
+output:
+  dir: 'outputs_hpc'

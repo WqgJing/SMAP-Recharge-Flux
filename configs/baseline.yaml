@@ -1,0 +1,105 @@
+# ============================================================================
+# BASELINE CONFIGURATION - Forward PINN Training
+# ============================================================================
+# This config file centralizes ALL hyperparameters for PINN training.
+# Copy and modify this file for different experiments.
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+data:
+  path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
+  start_date: '2017-05-19'
+  end_date: '2017-05-26'
+  interpolate: true
+  max_gap_hours: 6
+
+# ============================================================================
+# SOIL PARAMETERS (van Genuchten-Mualem)
+# ============================================================================
+soil:
+  theta_s: 0.40    # Saturated water content [-]
+  theta_r: 0.01    # Residual water content [-]
+  alpha: 3.4       # 1/m (van Genuchten α)
+  n: 1.7           # van Genuchten n (>1)
+  Ks: 1.0e-5       # m/s (saturated conductivity)
+  l: 0.50          # Mualem pore-connectivity parameter
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training:
+  n_epochs: 500000
+  learning_rate: 1.0e-4
+  device: 'auto'      # 'auto', 'cuda', or 'cpu'
+  seed: 44
+
+# ============================================================================
+# NETWORK ARCHITECTURE
+# ============================================================================
+network:
+  h_net:              # Pressure head network
+    hidden_dim: 64
+    num_layers: 4
+  zb_net:             # Water table network
+    hidden_dim: 32
+    num_layers: 3
+
+# ============================================================================
+# CACHE POOL & BATCH SAMPLING (PDE Collocation)
+# ============================================================================
+sampling:
+  cache_size: 80000           # Total candidate points in pool
+  batch_size: 4000            # Points sampled per iteration
+  resample_freq: 100          # Update residuals every N epochs
+  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0.6    # Fraction of batch from high-residual regions (0-1)
+  temperature: 0.3            # Softmax temperature (lower = more aggressive)
+
+# ============================================================================
+# BOUNDARY CONDITION SAMPLING (Gradient-Based)
+# ============================================================================
+boundary_sampling:
+  batch_size_bc: 250          # Dedicated BC points per iteration
+  interp_ratio: 0.30          # Fraction from gradient-interpolated points
+  neighbor_ratio: 0.00        # Fraction from neighbors of high-gradient regions
+  baseline_ratio: 0.70        # Fraction from uniform baseline
+  neighbor_expansion: 0       # How many neighbors around high-gradient intervals
+  gradient_threshold: 0.7     # Percentile for "high gradient" (0.7 = top 30%)
+  power: 2.0                  # Gradient emphasis (>1 = more aggressive)
+
+# ============================================================================
+# OPTIMIZATION & WEIGHT MANAGEMENT
+# ============================================================================
+optimization:
+  weight_update_freq: 10000000000  # Update weights every N epochs (1e10 = fixed)
+  weight_lr: 0.1                   # Learning rate for weight updates
+  use_initial_scales: true         # Use initial scale-based weights
+  use_amp: false                   # Mixed precision training (faster, less memory)
+  use_multi_gpu: true              # Use DataParallel if multiple GPUs available
+  grad_accumulation_steps: 1       # Gradient accumulation for larger effective batch
+
+# ============================================================================
+# CHECKPOINTING
+# ============================================================================
+checkpointing:
+  dir: 'checkpoints_train'
+  freq: 5000                  # Save checkpoint every N epochs (null = no checkpointing)
+  keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
+
+# ============================================================================
+# PHYSICS PARAMETERS
+# ============================================================================
+physics:
+  Sy: 0.3                     # Specific yield
+  zr: 0.5                     # Root zone depth [m]
+  L: 4.0                      # Characteristic length [m]
+  S_max: 1.0e-7               # Maximum sink term [1/s]
+  zb_initial: 6.1             # Initial water table depth [m]
+  ic_type: 'linear'      # Initial condition type: 'obs', 'linear', 'hydrostatic'
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output:
+  dir: 'outputs'

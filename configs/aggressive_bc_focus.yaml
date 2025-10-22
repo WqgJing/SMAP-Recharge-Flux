@@ -1,0 +1,75 @@
+# ============================================================================
+# AGGRESSIVE BC FOCUS - For challenging boundary conditions
+# ============================================================================
+# Use this when BC data has spikes or rapid changes.
+# High boundary_ratio, large batch_size_bc, aggressive gradient sampling.
+
+data:
+  path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
+  start_date: '2017-05-19'
+  end_date: '2017-05-26'
+  interpolate: true
+  max_gap_hours: 6
+
+soil:
+  theta_s: 0.40
+  theta_r: 0.01
+  alpha: 3.4
+  n: 1.7
+  Ks: 1.0e-5
+  l: 0.50
+
+training:
+  n_epochs: 500000
+  learning_rate: 1.0e-4
+  device: 'auto'
+  seed: 44
+
+network:
+  h_net:
+    hidden_dim: 64
+    num_layers: 4
+  zb_net:
+    hidden_dim: 32
+    num_layers: 3
+
+sampling:
+  cache_size: 80000
+  batch_size: 4000
+  resample_freq: 100
+  boundary_ratio: 0.85        # 85% boundary focus (vs 70% baseline)
+  high_residual_ratio: 0.7    # More aggressive residual sampling
+  temperature: 0.2            # Sharper focus on high residuals
+
+boundary_sampling:
+  batch_size_bc: 400          # 400 BC points (vs 250 baseline)
+  interp_ratio: 0.85          # 85% interpolated around spikes (vs 30%)
+  neighbor_ratio: 0.05        # 5% neighbors
+  baseline_ratio: 0.10        # Only 10% uniform
+  neighbor_expansion: 2       # Include neighbors for smoother coverage
+  gradient_threshold: 0.8     # Top 20% gradients (vs 30%)
+  power: 3.0                  # Very aggressive gradient weighting (vs 2.0)
+
+optimization:
+  weight_update_freq: 10000000000
+  weight_lr: 0.1
+  use_initial_scales: true
+  use_amp: false
+  use_multi_gpu: true
+  grad_accumulation_steps: 1
+
+checkpointing:
+  dir: 'checkpoints_aggressive_bc'
+  freq: 5000
+  keep_last_n: 3
+
+physics:
+  Sy: 0.3
+  zr: 0.5
+  L: 4.0
+  S_max: 1.0e-7
+  zb_initial: 6.1
+  ic_type: 'hydrostatic'
+
+output:
+  dir: 'outputs_aggressive_bc'
