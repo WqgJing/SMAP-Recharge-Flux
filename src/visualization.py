@@ -304,8 +304,10 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
                              (soil_params['theta_s'] - soil_params['theta_r']))
 
             # Remove NaN values for comparison
-            valid_mask = ~np.isnan(theta_obs)
-            theta_obs_valid = theta_obs[valid_mask]
+            # Convert theta_obs to numpy array if needed
+            theta_obs_np = np.array(theta_obs, dtype=np.float64)
+            valid_mask = ~np.isnan(theta_obs_np)
+            theta_obs_valid = theta_obs_np[valid_mask]
             theta_pinn_valid = theta_pinn[valid_mask]
 
             if len(theta_obs_valid) > 0:
