@@ -22,6 +22,7 @@ import os
 import argparse
 import time
 import pickle
+from datetime import datetime
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,8 +41,9 @@ import matplotlib.pyplot as plt
 from src.train_loop import train_pinn_pool_batch_autoweight
 from src.visualization import plot_comprehensive_results, plot_training_losses
 
-# Import config loader
+# Import config loader and preprocessing
 from src.config_loader import load_config
+from src.data_preprocessing import preprocess_soil_data
 
 print("=" * 70)
 print("FORWARD PINN TRAINING - CONFIG-BASED VERSION")
@@ -89,32 +91,42 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"CUDA Version: {torch.version.cuda}")
 
-# Create output directories
-os.makedirs(config.output_dir, exist_ok=True)
-os.makedirs(config.checkpoint_dir, exist_ok=True)
+# Create timestamped output directory structure
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+output_base = f"output_{timestamp}"
+output_dir = output_base
+checkpoint_dir = os.path.join(output_base, "checkpoint")
+figure_dir = os.path.join(output_base, "figure")
+
+# Create directories
+os.makedirs(output_dir, exist_ok=True)
+os.makedirs(checkpoint_dir, exist_ok=True)
+os.makedirs(figure_dir, exist_ok=True)
 
 print(f"\n✓ Configuration loaded from: {args.config}")
+print(f"✓ Output directory: {output_dir}/")
+print(f"  - Checkpoints: {checkpoint_dir}/")
+print(f"  - Figures: {figure_dir}/")
 
 # ============================================================================
 # Load Preprocessed Data
 # ============================================================================
 
 print("\n" + "=" * 70)
-print("LOADING PREPROCESSED SOIL MOISTURE DATA")
+print("PREPROCESSING SOIL MOISTURE DATA")
 print("=" * 70)
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 preprocessed_path = os.path.join(project_root, 'data', 'preprocessed_soil_data.pkl')
 
-if not os.path.exists(preprocessed_path):
-    print(f"❌ Preprocessed data not found: {preprocessed_path}")
-    print(f"\n⚠️  Please run the exploration notebook first:")
-    print(f"   jupyter notebook notebooks/explore_data.ipynb")
-    print(f"   (Run all cells to generate preprocessed_soil_data.pkl)")
-    sys.exit(1)
+print(f"Running preprocessing...")
+print(f"  Data path: {config.data_path}")
+print(f"  Date range: {config.start_date} to {config.end_date}")
 
-with open(preprocessed_path, 'rb') as f:
-    preprocessed_data = pickle.load(f)
+# Always run preprocessing to generate/override the pickle file
+preprocessed_data = preprocess_soil_data(config, output_path=preprocessed_path)
+
+print(f"✓ Preprocessing complete: {preprocessed_path}")
 
 # Extract boundary condition data (surface moisture at 2cm)
 theta0_times = preprocessed_data['theta0_times']
@@ -193,7 +205,7 @@ model, losses, comps, sample_losses, sample_comps, sample_epochs = train_pinn_po
     grad_accumulation_steps=config.grad_accumulation_steps,
 
     # Checkpointing
-    checkpoint_dir=config.checkpoint_dir,
+    checkpoint_dir=checkpoint_dir,  # Use our timestamped checkpoint directory
     checkpoint_freq=config.checkpoint_freq,
     keep_last_n_checkpoints=config.keep_last_n_checkpoints,
 
@@ -235,7 +247,7 @@ obs_data = {
 # Comprehensive results
 print("Creating comprehensive results plot...")
 plot_comprehensive_results(model, theta0_data, config.soil_params, device=device, obs_data=obs_data)
-output_path = os.path.join(config.output_dir, 'results_comprehensive.png')
+output_path = os.path.join(figure_dir, 'results_comprehensive.png')
 plt.savefig(output_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"✓ Saved: {output_path}")
@@ -243,7 +255,7 @@ print(f"✓ Saved: {output_path}")
 # Training losses
 print("Creating training loss plot...")
 plot_training_losses(losses, comps, sample_losses, sample_comps, sample_epochs)
-output_path = os.path.join(config.output_dir, 'training_losses.png')
+output_path = os.path.join(figure_dir, 'training_losses.png')
 plt.savefig(output_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"✓ Saved: {output_path}")
@@ -252,7 +264,7 @@ print(f"✓ Saved: {output_path}")
 # Save Summary
 # ============================================================================
 
-summary_path = os.path.join(config.output_dir, 'training_summary.txt')
+summary_path = os.path.join(output_dir, 'training_summary.txt')
 with open(summary_path, 'w') as f:
     f.write("=" * 70 + "\n")
     f.write("FORWARD PINN TRAINING SUMMARY\n")
@@ -281,8 +293,8 @@ with open(summary_path, 'w') as f:
     f.write(f"  Final IC zb loss: {comps['ic_zb'][-1]:.3e}\n\n")
 
     f.write("Outputs:\n")
-    f.write(f"  Checkpoints: {config.checkpoint_dir}/\n")
-    f.write(f"  Plots: {config.output_dir}/\n")
+    f.write(f"  Checkpoints: {checkpoint_dir}/\n")
+    f.write(f"  Plots: {figure_dir}/\n")
     f.write("=" * 70 + "\n")
 
 print(f"✓ Saved: {summary_path}")
@@ -292,7 +304,8 @@ print("ALL DONE!")
 print("=" * 70)
 print(f"\nOutputs:")
 print(f"  Config used: {args.config}")
-print(f"  Checkpoints: {config.checkpoint_dir}/")
-print(f"  Plots: {config.output_dir}/")
+print(f"  Output directory: {output_dir}/")
+print(f"  Checkpoints: {checkpoint_dir}/")
+print(f"  Figures: {figure_dir}/")
 print(f"  Summary: {summary_path}")
 print("=" * 70)

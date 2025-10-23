@@ -1,0 +1,30 @@
+======================================================================
+FORWARD PINN TRAINING SUMMARY
+======================================================================
+
+Configuration:
+  Config file: configs/baseline.yaml
+  Data: data/2017_HalfHourly_UTC_ForestSite1.xlsx
+  Date range: 2017-05-1 to 2017-05-19
+  Epochs: 10000
+  Learning rate: 0.0001
+  Cache size: 10000
+  Batch size: 500
+  Device: cpu
+  Mixed precision: False
+
+Results:
+  Total training time: 0.06 hours
+  Time per epoch: 21.9 ms
+  Final total loss: 7.465e-02
+  Final PDE loss: 3.563e-03
+  Final surface BC loss: 5.492e-02
+  Final WT head loss: 7.427e-03
+  Final WT kin loss: 7.950e-04
+  Final IC h loss: 7.905e-03
+  Final IC zb loss: 3.655e-05
+
+Outputs:
+  Checkpoints: output_20251023_115135/checkpoint/
+  Plots: output_20251023_115135/figure/
+======================================================================

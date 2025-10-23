@@ -9,8 +9,8 @@
 # ============================================================================
 data:
   path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
-  start_date: '2017-05-19'
-  end_date: '2017-05-26'
+  start_date: '2017-05-1'
+  end_date: '2017-05-19'
   interpolate: true
   max_gap_hours: 6
 
@@ -29,7 +29,7 @@ soil:
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 500000
+  n_epochs: 10000
   learning_rate: 1.0e-4
   device: 'auto'      # 'auto', 'cuda', or 'cpu'
   seed: 44
@@ -49,9 +49,9 @@ network:
 # CACHE POOL & BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 80000           # Total candidate points in pool
-  batch_size: 4000            # Points sampled per iteration
-  resample_freq: 100          # Update residuals every N epochs
+  cache_size: 10000           # Total candidate points in pool
+  batch_size: 500            # Points sampled per iteration
+  resample_freq: 10000          # Update residuals every N epochs
   boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
   high_residual_ratio: 0.6    # Fraction of batch from high-residual regions (0-1)
   temperature: 0.3            # Softmax temperature (lower = more aggressive)
@@ -84,7 +84,7 @@ optimization:
 # ============================================================================
 checkpointing:
   dir: 'checkpoints_train'
-  freq: 5000                  # Save checkpoint every N epochs (null = no checkpointing)
+  freq: 10000                  # Save checkpoint every N epochs (null = no checkpointing)
   keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
 
 # ============================================================================
@@ -96,7 +96,7 @@ physics:
   L: 4.0                      # Characteristic length [m]
   S_max: 1.0e-7               # Maximum sink term [1/s]
   zb_initial: 6.1             # Initial water table depth [m]
-  ic_type: 'linear'      # Initial condition type: 'obs', 'linear', 'hydrostatic'
+  ic_type: 'obs'      # Initial condition type: 'obs', 'linear', 'hydrostatic'
 
 # ============================================================================
 # OUTPUT CONFIGURATION
