@@ -316,27 +316,20 @@ def train_pinn_pool_batch_autoweight(
         logger.record_gradients(gradients)
         weight_manager.record_history()
 
-        # Save checkpoint periodically
+        # Save checkpoint periodically (minimal version without training history)
         if checkpoint_freq is not None and (epoch + 1) % checkpoint_freq == 0:
             checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch+1}.pt')
 
-            # Prepare checkpoint dictionary
+            # Prepare checkpoint dictionary (minimal - no training history)
             checkpoint_dict = {
                 'epoch': epoch,
                 'model_state_dict': model_core.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'weight_manager_state': {
-                    'weights': weight_manager.weights,
-                    'weight_history': weight_manager.weight_history,
-                    'grad_ema': weight_manager.grad_ema,
+                    'weights': weight_manager.weights,  # Current weights only
+                    'grad_ema': weight_manager.grad_ema,  # Current gradient EMA only
                 },
-                'logger_state': {
-                    'losses': logger.losses,
-                    'comps': logger.comps,
-                    'sample_losses': logger.sample_losses,
-                    'sample_comps': logger.sample_comps,
-                    'sample_epochs': logger.sample_epochs,
-                },
+                # Training history removed to reduce file size
                 'training_config': {
                     'n_epochs': n_epochs,
                     'learning_rate': learning_rate,
@@ -404,7 +397,7 @@ def train_pinn_pool_batch_autoweight(
     final_grad_norm = gradients.get("total", 0.0)
     logger.print_final_summary(final_grad_norm, weights, cache_manager)
 
-    # Save final checkpoint
+    # Save final checkpoint (minimal version without training history)
     if checkpoint_freq is not None:
         final_checkpoint_path = os.path.join(checkpoint_dir, 'checkpoint_final.pt')
         checkpoint_dict = {
@@ -412,17 +405,11 @@ def train_pinn_pool_batch_autoweight(
             'model_state_dict': model_core.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'weight_manager_state': {
-                'weights': weight_manager.weights,
-                'weight_history': weight_manager.weight_history,
-                'grad_ema': weight_manager.grad_ema,
+                'weights': weight_manager.weights,  # Current weights only (no history)
+                'grad_ema': weight_manager.grad_ema,  # Current gradient EMA only
             },
-            'logger_state': {
-                'losses': logger.losses,
-                'comps': logger.comps,
-                'sample_losses': logger.sample_losses,
-                'sample_comps': logger.sample_comps,
-                'sample_epochs': logger.sample_epochs,
-            },
+            # Training history removed to reduce file size (saved separately in plots/logs)
+            # If you need history, use intermediate checkpoints (checkpoint_epoch_XXXX.pt)
             'training_config': {
                 'n_epochs': n_epochs,
                 'learning_rate': learning_rate,
@@ -867,7 +854,7 @@ def finetune_pinn(
         logger.record_gradients(gradients)
         weight_manager.record_history()
 
-        # Save checkpoint periodically
+        # Save checkpoint periodically (minimal version without training history)
         if checkpoint_freq is not None and (epoch + 1) % checkpoint_freq == 0:
             checkpoint_path_ft = os.path.join(checkpoint_dir, f'finetune_epoch_{epoch+1}.pt')
 
@@ -876,17 +863,10 @@ def finetune_pinn(
                 'model_state_dict': model_core.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'weight_manager_state': {
-                    'weights': weight_manager.weights,
-                    'weight_history': weight_manager.weight_history,
-                    'grad_ema': weight_manager.grad_ema,
+                    'weights': weight_manager.weights,  # Current weights only
+                    'grad_ema': weight_manager.grad_ema,  # Current gradient EMA only
                 },
-                'logger_state': {
-                    'losses': logger.losses,
-                    'comps': logger.comps,
-                    'sample_losses': logger.sample_losses,
-                    'sample_comps': logger.sample_comps,
-                    'sample_epochs': logger.sample_epochs,
-                },
+                # Training history removed to reduce file size
                 'training_config': {
                     'n_epochs': n_epochs,
                     'learning_rate': learning_rate,
@@ -954,17 +934,11 @@ def finetune_pinn(
             'model_state_dict': model_core.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'weight_manager_state': {
-                'weights': weight_manager.weights,
-                'weight_history': weight_manager.weight_history,
-                'grad_ema': weight_manager.grad_ema,
+                'weights': weight_manager.weights,  # Current weights only (no history)
+                'grad_ema': weight_manager.grad_ema,  # Current gradient EMA only
             },
-            'logger_state': {
-                'losses': logger.losses,
-                'comps': logger.comps,
-                'sample_losses': logger.sample_losses,
-                'sample_comps': logger.sample_comps,
-                'sample_epochs': logger.sample_epochs,
-            },
+            # Training history removed to reduce file size (saved separately in plots/logs)
+            # If you need history, use intermediate checkpoints (checkpoint_epoch_XXXX.pt)
             'training_config': {
                 'n_epochs': n_epochs,
                 'learning_rate': learning_rate,
