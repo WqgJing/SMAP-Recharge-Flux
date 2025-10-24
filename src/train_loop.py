@@ -8,7 +8,6 @@ from .training_utils import (
     apply_weights_and_compute_gradients,
     apply_weights_fixed_mode,
     WeightManager,
-    CachePoolManager,
     compute_grad_norm,
     compute_total_grad_norm,
     compute_full_sample_loss
@@ -193,18 +192,6 @@ def train_pinn_pool_batch_autoweight(
             print(f"Warning: Checkpoint file not found: {resume_from_checkpoint}")
             print("Starting training from scratch")
 
-    # --- Initialize cache pool manager ---
-    cache_manager = CachePoolManager(
-        cache_size=cache_size,
-        batch_size=batch_size,
-        device=device,
-        q0_times_t=bc_times_t,
-        t_max=t_max,
-        boundary_ratio=boundary_ratio,
-        high_residual_ratio=high_residual_ratio,
-        temperature=temperature,
-    )
-
     # --- Print initial information ---
     print(f"Training for {n_epochs} epochs | lr={learning_rate}")
     print(f"Device: {device} | GPUs available: {n_gpus}")
@@ -216,12 +203,10 @@ def train_pinn_pool_batch_autoweight(
         print(f"Gradient Accumulation: {grad_accumulation_steps} steps")
     print(f"Adaptive weighting: updating every {weight_update_freq} epochs")
     print(
-        f"Pool + Batch: cache_size={cache_size}, batch_size={batch_size}, "
-        f"resample_freq={resample_freq}"
+        f"Direct Sampling: batch_size={batch_size} (no cache, no adaptive residuals)"
     )
     print(
-        f"Boundary ratio: {boundary_ratio:.1%}, "
-        f"High residual ratio: {high_residual_ratio:.1%}"
+        f"Boundary ratio: {boundary_ratio:.1%}"
     )
     print(
         f"Time domain from theta0: t∈[{t_min:.3f}, {t_max:.3f}], "
@@ -235,11 +220,10 @@ def train_pinn_pool_batch_autoweight(
         if epoch % grad_accumulation_steps == 0:
             optimizer.zero_grad()
 
-        # Update cache residuals and sampling probabilities (use model_core for direct method access)
-        cache_manager.update_residuals(model_core, epoch, resample_freq)
-
-        # Sample training points (use model_core for direct method access)
-        z_col, t_col = cache_manager.sample_batch(model_core, epoch)
+        # Sample training points directly (no cache, no adaptive residuals)
+        z_col, t_col = sampling.sample_pde_points_direct(
+            model_core, batch_size, t_max, device, boundary_ratio=boundary_ratio
+        )
 
         # Gradient-based boundary condition sampling (three-way: interp + neighbor + baseline)
         t_bc, _ = gradient_based_sampling(
@@ -334,7 +318,6 @@ def train_pinn_pool_batch_autoweight(
                     'n_epochs': n_epochs,
                     'learning_rate': learning_rate,
                     'batch_size': batch_size,
-                    'cache_size': cache_size,
                 },
                 # Normalization parameters (critical for fine-tuning)
                 'normalization_params': {
@@ -375,13 +358,14 @@ def train_pinn_pool_batch_autoweight(
         # Print progress
         if (epoch + 1) % 200 == 0 or epoch == 0:
             logger.print_progress(
-                epoch, n_epochs, total_loss, weighted_losses, gradients, weights, cache_manager
+                epoch, n_epochs, total_loss, weighted_losses, gradients, weights, cache_manager=None
             )
 
         # Compute and record sample loss (over full dataset) every 500 epochs
         if (epoch + 1) % 500 == 0 or epoch == 0:
             sample_losses_dict = compute_full_sample_loss(
-                model_core, cache_manager, bc_times_t, t_min, z_max, device
+                model_core, None, bc_times_t, t_min, z_max, device,
+                t_max=t_max, boundary_ratio=boundary_ratio, sample_size=5000
             )
             logger.record_sample_losses(epoch, sample_losses_dict, weights)
 
@@ -395,7 +379,7 @@ def train_pinn_pool_batch_autoweight(
 
     # Print final summary
     final_grad_norm = gradients.get("total", 0.0)
-    logger.print_final_summary(final_grad_norm, weights, cache_manager)
+    logger.print_final_summary(final_grad_norm, weights, cache_manager=None)
 
     # Save final checkpoint (minimal version without training history)
     if checkpoint_freq is not None:
@@ -748,17 +732,6 @@ def finetune_pinn(
     t_min = float(t_min_gpu.item())
     t_max = float(t_max_gpu.item())
 
-    cache_manager = CachePoolManager(
-        cache_size=cache_size,
-        batch_size=batch_size,
-        device=device,
-        q0_times_t=theta0_times_t,
-        t_max=t_max,
-        boundary_ratio=boundary_ratio,
-        high_residual_ratio=high_residual_ratio,
-        temperature=temperature,
-    )
-
     # Print training information
     print(f"\nStarting fine-tuning for {n_epochs} epochs | lr={learning_rate:.2e}")
     print(f"Device: {device} | GPUs available: {n_gpus}")
@@ -770,12 +743,10 @@ def finetune_pinn(
         print(f"Gradient Accumulation: {grad_accumulation_steps} steps")
     print(f"Fixed weights: {use_fixed_weights}")
     print(
-        f"Pool + Batch: cache_size={cache_size}, batch_size={batch_size}, "
-        f"resample_freq={resample_freq}"
+        f"Direct Sampling: batch_size={batch_size} (no cache, no adaptive residuals)"
     )
     print(
-        f"Boundary ratio: {boundary_ratio:.1%}, "
-        f"High residual ratio: {high_residual_ratio:.1%}"
+        f"Boundary ratio: {boundary_ratio:.1%}"
     )
     print(f"Initial weights: {weight_manager.get_weights()}\n")
 
@@ -787,9 +758,10 @@ def finetune_pinn(
         if epoch % grad_accumulation_steps == 0:
             optimizer.zero_grad()
 
-        cache_manager.update_residuals(model_core, epoch, resample_freq)
-
-        z_col, t_col = cache_manager.sample_batch(model_core, epoch)
+        # Sample training points directly (no cache, no adaptive residuals)
+        z_col, t_col = sampling.sample_pde_points_direct(
+            model_core, batch_size, t_max, device, boundary_ratio=boundary_ratio
+        )
 
         # ✅ GPU-OPTIMIZED: Use cached theta0_values_t (no recreation)
         # Gradient-based boundary condition sampling
@@ -871,7 +843,6 @@ def finetune_pinn(
                     'n_epochs': n_epochs,
                     'learning_rate': learning_rate,
                     'batch_size': batch_size,
-                    'cache_size': cache_size,
                 },
                 'normalization_params': {
                     'soil_params': soil_params,
@@ -906,13 +877,14 @@ def finetune_pinn(
         # Print progress
         if (epoch + 1) % 200 == 0 or epoch == 0:
             logger.print_progress(
-                epoch, n_epochs, total_loss, weighted_losses, gradients, weights, cache_manager
+                epoch, n_epochs, total_loss, weighted_losses, gradients, weights, cache_manager=None
             )
 
         # Compute and record sample loss every 500 epochs
         if (epoch + 1) % 500 == 0 or epoch == 0:
             sample_losses_dict = compute_full_sample_loss(
-                model_core, cache_manager, q0_times_t, t_min, 0.0, device
+                model_core, None, theta0_times_t, t_min, 0.0, device,
+                t_max=t_max, boundary_ratio=boundary_ratio, sample_size=5000
             )
             logger.record_sample_losses(epoch, sample_losses_dict, weights)
 
@@ -924,7 +896,7 @@ def finetune_pinn(
 
     # Print final summary
     final_grad_norm = gradients.get("total", 0.0)
-    logger.print_final_summary(final_grad_norm, weights, cache_manager)
+    logger.print_final_summary(final_grad_norm, weights, cache_manager=None)
 
     # Save final checkpoint
     if checkpoint_freq is not None:
