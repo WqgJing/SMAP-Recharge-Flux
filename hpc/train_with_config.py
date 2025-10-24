@@ -281,6 +281,14 @@ with open(summary_path, 'w') as f:
     f.write(f"  Device: {device}\n")
     f.write(f"  Mixed precision: {config.use_amp}\n\n")
 
+    f.write("Soil Parameters:\n")
+    f.write(f"  theta_s (saturated): {config.soil_params['theta_s']}\n")
+    f.write(f"  theta_r (residual): {config.soil_params['theta_r']}\n")
+    f.write(f"  alpha (van Genuchten): {config.soil_params['alpha']} 1/m\n")
+    f.write(f"  n (van Genuchten): {config.soil_params['n']}\n")
+    f.write(f"  Ks (saturated conductivity): {config.soil_params['Ks']:.2e} m/s\n")
+    f.write(f"  l (pore-connectivity): {config.soil_params['l']}\n\n")
+
     f.write("Results:\n")
     f.write(f"  Total training time: {elapsed_time/3600:.2f} hours\n")
     f.write(f"  Time per epoch: {elapsed_time/config.n_epochs*1000:.1f} ms\n")
