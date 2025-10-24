@@ -32,6 +32,12 @@ nvidia-smi
 # Pass run name as first argument (default: 'default_run')
 RUN_NAME="${1:-default_run}"
 echo "Run name: $RUN_NAME"
-python3 -u train_with_config.py "$RUN_NAME"
+
+# Change to project root so relative paths in config work
+cd ..
+echo "Working directory: $(pwd)"
+
+# Run training with config path relative to project root
+python3 -u hpc/train_with_config.py --config configs/baseline.yaml --run_name "$RUN_NAME"
 
 echo "End time: $(date)"

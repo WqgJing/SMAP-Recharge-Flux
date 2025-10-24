@@ -18,11 +18,11 @@ data:
 # SOIL PARAMETERS (van Genuchten-Mualem)
 # ============================================================================
 soil:
-  theta_s: 0.40    # Saturated water content [-]
-  theta_r: 0.01    # Residual water content [-]
-  alpha: 3.4       # 1/m (van Genuchten α)
-  n: 1.7           # van Genuchten n (>1)
-  Ks: 1.0e-5       # m/s (saturated conductivity)
+  theta_s: 0.46    # Saturated water content [-]
+  theta_r: 0.05   # Residual water content [-]
+  alpha: 4       # 1/m (van Genuchten α)
+  n: 1.45           # van Genuchten n (>1)
+  Ks: 2.0e-5       # m/s (saturated conductivity)
   l: 0.50          # Mualem pore-connectivity parameter
 
 # ============================================================================
@@ -60,7 +60,7 @@ sampling:
 # BOUNDARY CONDITION SAMPLING (Gradient-Based)
 # ============================================================================
 boundary_sampling:
-  batch_size_bc: 250          # Dedicated BC points per iteration
+  batch_size_bc: 450          # Dedicated BC points per iteration
   interp_ratio: 0.30          # Fraction from gradient-interpolated points
   neighbor_ratio: 0.00        # Fraction from neighbors of high-gradient regions
   baseline_ratio: 0.70        # Fraction from uniform baseline
