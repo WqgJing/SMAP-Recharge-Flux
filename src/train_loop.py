@@ -498,6 +498,9 @@ def finetune_pinn(
     high_residual_ratio=0.6,
     temperature=1.0,
     batch_size_bc=100,
+    # Initial condition parameters
+    ic_profile=None,  # Measured IC profile parameter
+    ic_type='obs',    # IC type: 'obs', 'linear', or 'hydrostatic'
     # Gradient-based boundary sampling parameters
     interp_ratio=0.80,
     neighbor_ratio=0.05,
@@ -534,6 +537,10 @@ def finetune_pinn(
 
         n_epochs: Number of fine-tuning epochs (default: 10k, much less than training)
         learning_rate: Learning rate (default: 1e-4, lower than training)
+
+        ic_profile: Initial condition profile (dict with 'depths' and 'theta' keys)
+                   If None, uses hydrostatic profile
+        ic_type: Type of IC ('obs', 'linear', or 'hydrostatic')
 
         checkpoint_dir: Directory for fine-tuning checkpoints (isolated from base)
         checkpoint_freq: Save checkpoint every N epochs
@@ -656,6 +663,8 @@ def finetune_pinn(
         t_max=new_t_max,  # Use NEW data's t_max (doesn't affect network scaling anymore)
         z_max_tilde=z_max_tilde,  # Preserve from base
         t_ref_days=t_ref_days,  # FIXED reference time from base model
+        ic_profile=ic_profile,  # NEW initial condition profile
+        ic_type=ic_type,        # IC type for fine-tuning
         device=device,
     ).to(device)
 
@@ -706,7 +715,7 @@ def finetune_pinn(
         print(f"Fixed weights mode enabled (weight_update_freq={weight_update_freq} >= n_epochs={n_epochs})")
 
     # Initialize weights from checkpoint if available, otherwise use initial scales
-    weight_manager = WeightManager(use_initial_scales, weight_lr, use_fixed_weights=use_fixed_weights, bc_type=model_core.bc_type)
+    weight_manager = WeightManager(use_initial_scales, weight_lr, use_fixed_weights=use_fixed_weights)
     if 'weight_manager_state' in checkpoint:
         weight_manager.weights = checkpoint['weight_manager_state']['weights']
         print(f"Using weights from base model: {weight_manager.weights}")
