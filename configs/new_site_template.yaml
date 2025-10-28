@@ -1,0 +1,217 @@
+# ============================================================================
+# NEW SITE TEMPLATE - Forward PINN Training
+# ============================================================================
+# INSTRUCTIONS:
+# 1. Copy this file to a new name (e.g., 'my_site_2020.yaml')
+# 2. Fill in the sections below based on your Excel file structure
+# 3. Run: python hpc/train_simple.py --config configs/my_site_2020.yaml
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+data:
+  # Path to your Excel file (relative to project root)
+  path: 'data/YOUR_FILE_NAME.xlsx'
+
+  # Date range to use for training
+  start_date: 'YYYY-MM-DD'  # Example: '2020-05-01'
+  end_date: 'YYYY-MM-DD'    # Example: '2020-09-30'
+
+  # Interpolation settings for small data gaps
+  interpolate: true
+  max_gap_hours: 6  # Interpolate gaps ≤ 6 hours, keep larger gaps as NaN
+
+  # ========================================================================
+  # COLUMN MAPPING - THIS IS THE KEY PART!
+  # ========================================================================
+  column_mapping:
+    # ----------------------------------------------------------------------
+    # OPTION 1: Single-level header (most common)
+    # ----------------------------------------------------------------------
+    # Use this if your Excel looks like:
+    #   | datetime    | SWC_5cm | SWC_15cm | SWC_30cm | ... |
+    #   | 2020-05-01  | 0.25    | 0.30     | 0.35     | ... |
+
+    datetime: 'datetime'  # ← Replace with your datetime column name
+    multi_level_header: false
+
+    # ----------------------------------------------------------------------
+    # OPTION 2: Multi-level header (like Calhoun CCZO)
+    # ----------------------------------------------------------------------
+    # Use this if your Excel looks like:
+    #   | Unnamed: 0_level_0 | CR1000_2589  | CR1000_2589  | ... |
+    #   | Date Time          | 5cm theta    | 15cm theta   | ... |
+    #   | 2020-05-01 00:00   | 0.25         | 0.30         | ... |
+
+    # datetime: ['Unnamed: 0_level_0', 'Date Time']  # ← Uncomment if multi-level
+    # multi_level_header: true                        # ← Uncomment if multi-level
+
+    # ----------------------------------------------------------------------
+    # Unit conversion
+    # ----------------------------------------------------------------------
+    # If your data is in percentage (0-100), use 0.01
+    # If your data is already in fraction (0-1), use 1.0
+    unit_conversion: 1.0  # ← Change to 0.01 if data is percentage
+
+    # ----------------------------------------------------------------------
+    # Depth mappings - CRITICAL SECTION
+    # ----------------------------------------------------------------------
+    # ⚠️ IMPORTANT: The FIRST depth listed = SURFACE BOUNDARY CONDITION
+    # This will be used as θ(z=0,t) in the PINN training
+
+    # SINGLE-LEVEL HEADER FORMAT:
+    depths:
+      5cm: 'SWC_5cm'      # ← Surface BC (shallowest sensor, listed FIRST)
+      15cm: 'SWC_15cm'    # ← Depth sensor 1
+      30cm: 'SWC_30cm'    # ← Depth sensor 2
+      50cm: 'SWC_50cm'    # ← Depth sensor 3
+      # Add more depths as needed...
+
+    # MULTI-LEVEL HEADER FORMAT (uncomment if needed):
+    # depths:
+    #   5cm: ['Logger_Name', '5cm theta']   # ← Surface BC
+    #   15cm: ['Logger_Name', '15cm theta']
+    #   30cm: ['Logger_Name', '30cm theta']
+
+    # ----------------------------------------------------------------------
+    # Optional: Water table depth (if available)
+    # ----------------------------------------------------------------------
+    # wtd: 'WTD_column_name'  # ← Uncomment and set if you have WTD data
+    # wtd_sign: -1.0          # ← Use -1.0 if positive values = below surface
+
+# ============================================================================
+# SOIL PARAMETERS (van Genuchten-Mualem)
+# ============================================================================
+# ⚠️ UPDATE THESE FOR YOUR SITE! These are example values.
+# You should get these from:
+#   - Site-specific measurements
+#   - Soil surveys (e.g., SSURGO database)
+#   - Literature values for your soil type
+soil:
+  theta_s: 0.45    # Saturated water content [-]
+  theta_r: 0.05    # Residual water content [-]
+  alpha: 3.5       # van Genuchten α [1/m]
+  n: 1.5           # van Genuchten n (>1) [-]
+  Ks: 1.0e-5       # Saturated hydraulic conductivity [m/s]
+  l: 0.5           # Mualem pore-connectivity parameter [-]
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training:
+  n_epochs: 5000         # Number of training iterations
+  learning_rate: 1.0e-4  # Adam optimizer learning rate
+  device: 'auto'         # 'auto' (use GPU if available), 'cuda', or 'cpu'
+  seed: 42               # Random seed for reproducibility
+
+# ============================================================================
+# NETWORK ARCHITECTURE
+# ============================================================================
+network:
+  h_net:              # Pressure head network h(z,t)
+    hidden_dim: 64    # Neurons per hidden layer
+    num_layers: 4     # Number of hidden layers
+  zb_net:             # Water table network zb(t)
+    hidden_dim: 32
+    num_layers: 3
+
+# ============================================================================
+# CACHE POOL & BATCH SAMPLING (PDE Collocation Points)
+# ============================================================================
+sampling:
+  cache_size: 10000           # Total candidate points in pool
+  batch_size: 500             # Points sampled per iteration
+  resample_freq: 10000        # Update residuals every N epochs
+  boundary_ratio: 0.7         # Fraction near boundaries (0-1)
+  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
+  temperature: 0.3            # Softmax temperature (lower = more aggressive)
+
+# ============================================================================
+# BOUNDARY CONDITION SAMPLING (Surface θ)
+# ============================================================================
+boundary_sampling:
+  batch_size_bc: 450          # BC points per iteration
+  interp_ratio: 0.30          # Fraction from gradient-interpolated points
+  neighbor_ratio: 0.00        # Fraction from high-gradient neighbors
+  baseline_ratio: 0.70        # Fraction from uniform baseline
+  neighbor_expansion: 0       # Neighbors around high-gradient intervals
+  gradient_threshold: 0.7     # Percentile for "high gradient" (0.7 = top 30%)
+  power: 2.0                  # Gradient emphasis (>1 = more aggressive)
+
+# ============================================================================
+# OPTIMIZATION & WEIGHT MANAGEMENT
+# ============================================================================
+optimization:
+  weight_update_freq: 10000000000  # Update weights every N epochs (1e10 = fixed)
+  weight_lr: 0.1                   # Learning rate for weight updates
+  use_initial_scales: true         # Use initial scale-based weights
+  use_amp: false                   # Mixed precision (faster, less memory)
+  use_multi_gpu: true              # Use DataParallel if multiple GPUs
+  grad_accumulation_steps: 1       # Gradient accumulation steps
+
+# ============================================================================
+# CHECKPOINTING
+# ============================================================================
+checkpointing:
+  dir: 'checkpoints_train'
+  freq: 1000                  # Save checkpoint every N epochs
+  keep_last_n: 3              # Keep only last N checkpoints
+
+# ============================================================================
+# PHYSICS PARAMETERS
+# ============================================================================
+physics:
+  Sy: 0.3                     # Specific yield [-] (⚠️ UPDATE FOR YOUR SITE)
+  zr: 0.5                     # Root zone depth [m] (⚠️ UPDATE FOR YOUR SITE)
+  L: 4.0                      # Characteristic length [m] (⚠️ UPDATE)
+  S_max: 1.0e-7               # Maximum sink term [1/s] (⚠️ UPDATE)
+  zb_initial: 5.0             # Initial water table depth [m] (⚠️ UPDATE)
+  ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output:
+  dir: 'outputs'
+
+# ============================================================================
+# QUICK START GUIDE
+# ============================================================================
+# After customizing this file:
+#
+# 1. Command line training:
+#    python hpc/train_simple.py --config configs/your_file.yaml
+#
+# 2. Interactive notebook:
+#    - Open notebooks/train_simple.ipynb
+#    - Change config_file = '../configs/your_file.yaml'
+#    - Run cells
+#
+# 3. Check data quality before training:
+#    from src.dataset import PINNDataset
+#    dataset = PINNDataset('configs/your_file.yaml', verbose=True)
+#    # Will print data completeness statistics
+#
+# ============================================================================
+# COMMON ISSUES & SOLUTIONS
+# ============================================================================
+#
+# Issue: FileNotFoundError
+# → Check that data.path is correct relative to project root
+#
+# Issue: KeyError when loading columns
+# → Check column names match exactly (case-sensitive!)
+# → For multi-level headers, use list format: ['Level0', 'Level1']
+#
+# Issue: "No valid data" warnings
+# → Check unit_conversion (0.01 for %, 1.0 for fraction)
+# → Check date range has data in your Excel file
+#
+# Issue: ValueError about theta_s/theta_r
+# → Ensure theta_s > theta_r
+# → Ensure values are physically reasonable (0 < theta_r < theta_s < 1)
+#
+# For more help, see:
+#   - YAML_CONFIG_GUIDE.md (detailed examples)
+#   - SYSTEM_OVERVIEW.md (architecture reference)
+#   - HANDLING_VARIABLE_DEPTHS.md (depth configuration)

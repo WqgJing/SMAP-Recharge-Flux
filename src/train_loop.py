@@ -955,3 +955,199 @@ def finetune_pinn(
     return model_core, losses_np, comps_np, logger.sample_losses, logger.sample_comps, logger.sample_epochs
 
 
+
+
+# ============================================================================
+# NEW UNIFIED API - Dataset-Based Training Functions
+# ============================================================================
+
+def train_pinn(dataset, device='auto', checkpoint_dir=None):
+    """
+    Train PINN using unified PINNDataset - NEW SIMPLIFIED API.
+
+    All parameters come from the dataset object (loaded from YAML).
+    No need to pass 30+ arguments!
+
+    Args:
+        dataset: PINNDataset object (contains config, data, everything!)
+        device: Device for training ('auto', 'cuda', 'cpu')
+        checkpoint_dir: Override checkpoint directory (optional)
+
+    Returns:
+        model: Trained PINN model
+        losses: Total loss history
+        loss_components: Dict of component histories
+        sample_losses: Sample-based losses
+        sample_components: Sample-based components
+        sample_epochs: Sample epochs
+
+    Example:
+        dataset = PINNDataset('configs/baseline.yaml')
+        model, losses, comps, *_ = train_pinn(dataset, device='cuda')
+        plot_results(model, dataset)
+    """
+    import torch
+
+    # Set device
+    if device == 'auto':
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    else:
+        device = torch.device(device)
+
+    # Set random seeds
+    torch.manual_seed(dataset.seed)
+    import numpy as np
+    np.random.seed(dataset.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(dataset.seed)
+
+    # Use checkpoint_dir from dataset if not overridden
+    if checkpoint_dir is None:
+        checkpoint_dir = dataset.checkpoint_dir
+
+    # Call the existing training function with parameters from dataset
+    model, losses, comps, sample_losses, sample_comps, sample_epochs = train_pinn_pool_batch_autoweight(
+        # Data
+        soil_params=dataset.soil_params,
+        theta0_data=dataset.get_bc_data(),
+        ic_profile=dataset.ic_profile,
+        ic_type=dataset.ic_type,
+
+        # Physics parameters
+        Sy=dataset.Sy,
+        zr=dataset.zr,
+        L=dataset.L,
+        S_max=dataset.S_max,
+        zb_initial=dataset.zb_initial,
+
+        # Network architecture
+        h_net_config=dataset.h_net_config,
+        zb_net_config=dataset.zb_net_config,
+
+        # Training hyperparameters
+        n_epochs=dataset.n_epochs,
+        learning_rate=dataset.learning_rate,
+
+        # Cache pool & batch sampling
+        cache_size=dataset.cache_size,
+        batch_size=dataset.batch_size,
+        resample_freq=dataset.resample_freq,
+        boundary_ratio=dataset.boundary_ratio,
+        high_residual_ratio=dataset.high_residual_ratio,
+        temperature=dataset.temperature,
+
+        # Boundary condition sampling
+        batch_size_bc=dataset.batch_size_bc,
+        interp_ratio=dataset.interp_ratio,
+        neighbor_ratio=dataset.neighbor_ratio,
+        baseline_ratio=dataset.baseline_ratio,
+        gradient_neighbor_expansion=dataset.gradient_neighbor_expansion,
+        gradient_threshold=dataset.gradient_threshold,
+        gradient_power=dataset.gradient_power,
+
+        # Optimization
+        weight_update_freq=dataset.weight_update_freq,
+        weight_lr=dataset.weight_lr,
+        use_initial_scales=dataset.use_initial_scales,
+        use_amp=dataset.use_amp,
+        use_multi_gpu=dataset.use_multi_gpu,
+        grad_accumulation_steps=dataset.grad_accumulation_steps,
+
+        # Checkpointing
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_freq=dataset.checkpoint_freq,
+        keep_last_n_checkpoints=dataset.keep_last_n_checkpoints,
+
+        # Device
+        device=device,
+    )
+
+    return model, losses, comps, sample_losses, sample_comps, sample_epochs
+
+
+def finetune_pinn_with_dataset(base_checkpoint_path, new_dataset, device='auto', checkpoint_dir=None):
+    """
+    Fine-tune PINN using unified PINNDataset - NEW SIMPLIFIED API.
+
+    Args:
+        base_checkpoint_path: Path to base trained checkpoint
+        new_dataset: PINNDataset for new time period/location
+        device: Device for training
+        checkpoint_dir: Override checkpoint directory (optional)
+
+    Returns:
+        model: Fine-tuned PINN model
+        losses: Total loss history
+        loss_components: Dict of component histories
+        sample_losses: Sample-based losses
+        sample_components: Sample-based components
+        sample_epochs: Sample epochs
+
+    Example:
+        base_dataset = PINNDataset('configs/baseline.yaml')
+        model_base, *_ = train_pinn(base_dataset)
+        
+        finetune_dataset = PINNDataset('configs/finetune_calhoun.yaml')
+        model_ft, *_ = finetune_pinn_with_dataset('checkpoint.pt', finetune_dataset)
+    """
+    import torch
+
+    # Set device
+    if device == 'auto':
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    else:
+        device = torch.device(device)
+
+    # Use checkpoint_dir from dataset if not overridden
+    if checkpoint_dir is None:
+        checkpoint_dir = new_dataset.checkpoint_dir
+
+    # Call existing fine-tuning function
+    model, losses, comps, sample_losses, sample_comps, sample_epochs = finetune_pinn(
+        checkpoint_path=base_checkpoint_path,
+        new_theta0_data=new_dataset.get_bc_data(),
+        zb_initial=new_dataset.zb_initial,
+        h_net_config=new_dataset.h_net_config,
+        zb_net_config=new_dataset.zb_net_config,
+
+        # Fine-tuning hyperparameters
+        n_epochs=new_dataset.n_epochs,
+        learning_rate=new_dataset.learning_rate,
+
+        # Sampling parameters
+        cache_size=new_dataset.cache_size,
+        batch_size=new_dataset.batch_size,
+        resample_freq=new_dataset.resample_freq,
+        boundary_ratio=new_dataset.boundary_ratio,
+
+        # Gradient-based boundary sampling
+        batch_size_bc=new_dataset.batch_size_bc,
+        interp_ratio=new_dataset.interp_ratio,
+        neighbor_ratio=new_dataset.neighbor_ratio,
+        baseline_ratio=new_dataset.baseline_ratio,
+        gradient_neighbor_expansion=new_dataset.gradient_neighbor_expansion,
+        gradient_threshold=new_dataset.gradient_threshold,
+        gradient_power=new_dataset.gradient_power,
+
+        # Weight management
+        weight_update_freq=new_dataset.weight_update_freq,
+        weight_lr=new_dataset.weight_lr,
+        use_initial_scales=new_dataset.use_initial_scales,
+
+        # Initial condition
+        ic_profile=new_dataset.ic_profile,
+        ic_type=new_dataset.ic_type,
+
+        # Device and GPU settings
+        device=device,
+        use_multi_gpu=new_dataset.use_multi_gpu,
+        use_amp=new_dataset.use_amp,
+        grad_accumulation_steps=new_dataset.grad_accumulation_steps,
+
+        # Checkpointing
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_freq=new_dataset.checkpoint_freq,
+        keep_last_n_checkpoints=new_dataset.keep_last_n_checkpoints,
+    )
+
+    return model, losses, comps, sample_losses, sample_comps, sample_epochs

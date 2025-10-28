@@ -38,6 +38,10 @@ data:
       60cm: 'SWC_2_3_1'  # Depth sensor 4
       # Note: US-Uaf data has 5 SWC sensors total
 
+    # Water table depth (optional - for validation only)
+    wtd: 'WTD_1_1_1'      # Water table depth column
+    wtd_sign: -1.0         # Multiply by -1 to convert to positive downward
+
 # ============================================================================
 # SOIL PARAMETERS (van Genuchten-Mualem)
 # ============================================================================
@@ -54,7 +58,7 @@ soil:
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 10000
+  n_epochs: 5000
   learning_rate: 1.0e-4
   device: 'auto'      # 'auto', 'cuda', or 'cpu'
   seed: 44
