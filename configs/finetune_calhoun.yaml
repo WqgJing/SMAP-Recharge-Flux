@@ -1,33 +1,25 @@
 # ============================================================================
-# BASELINE CONFIGURATION - Forward PINN Training
+# FINE-TUNING CONFIGURATION - Calhoun CCZO Data
 # ============================================================================
-# This config file centralizes ALL hyperparameters for PINN training.
-# Copy and modify this file for different experiments.
+# This config is for fine-tuning a pre-trained model on a NEW time period
+# The date range should be DIFFERENT from your base training period
 
 # ============================================================================
 # DATA CONFIGURATION
 # ============================================================================
 data:
   path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
-  start_date: '2017-05-1'
-  end_date: '2017-05-19'
+  # Fine-tuning period (different from baseline training)
+  start_date: '2017-05-20'  # After baseline training period
+  end_date: '2017-05-31'    # ~11 days for fine-tuning
   interpolate: true
   max_gap_hours: 6
 
-  # Column mapping - specifies which columns to use for each depth
-  # This allows the same code to work with different data formats
+  # Column mapping - same as baseline (Calhoun data)
   column_mapping:
-    # Datetime column name (use tuple for multi-level headers)
     datetime: ['Unnamed: 0_level_0', 'Date Time']
-
-    # Multi-level header indicator
     multi_level_header: true
-
-    # Unit conversion factor (1.0 for m³/m³, 0.01 for percentage to fraction)
     unit_conversion: 1.0
-
-    # Depth column mappings (depth_name: column_name)
-    # Use tuple for multi-level headers, string for single-level
     depths:
       2cm: ['CR1000_2589', '2cm theta']
       15cm: ['CR1000_2589', '15cm theta']
@@ -39,6 +31,7 @@ data:
 # ============================================================================
 # SOIL PARAMETERS (van Genuchten-Mualem)
 # ============================================================================
+# IMPORTANT: These MUST match your base training checkpoint!
 soil:
   theta_s: 0.46    # Saturated water content [-]
   theta_r: 0.05   # Residual water content [-]
@@ -51,19 +44,20 @@ soil:
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 10000
-  learning_rate: 1.0e-4
-  device: 'auto'      # 'auto', 'cuda', or 'cpu'
-  seed: 44
+  n_epochs: 10000      # Fewer epochs than base training
+  learning_rate: 1.0e-4  # Lower LR than base training (was 1.0e-4 or 5.0e-4)
+  device: 'auto'
+  seed: 42
 
 # ============================================================================
 # NETWORK ARCHITECTURE
 # ============================================================================
+# IMPORTANT: These MUST match your base training checkpoint!
 network:
-  h_net:              # Pressure head network
+  h_net:
     hidden_dim: 64
     num_layers: 4
-  zb_net:             # Water table network
+  zb_net:
     hidden_dim: 32
     num_layers: 3
 
@@ -71,57 +65,58 @@ network:
 # CACHE POOL & BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 10000           # Total candidate points in pool
-  batch_size: 500            # Points sampled per iteration
-  resample_freq: 10000          # Update residuals every N epochs
-  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
-  high_residual_ratio: 0.6    # Fraction of batch from high-residual regions (0-1)
-  temperature: 0.3            # Softmax temperature (lower = more aggressive)
+  cache_size: 10000
+  batch_size: 500
+  resample_freq: 10000
+  boundary_ratio: 0.0      # Uniform sampling for fine-tuning
+  high_residual_ratio: 0.6
+  temperature: 0.3
 
 # ============================================================================
 # BOUNDARY CONDITION SAMPLING (Gradient-Based)
 # ============================================================================
 boundary_sampling:
-  batch_size_bc: 450          # Dedicated BC points per iteration
-  interp_ratio: 0.30          # Fraction from gradient-interpolated points
-  neighbor_ratio: 0.00        # Fraction from neighbors of high-gradient regions
-  baseline_ratio: 0.70        # Fraction from uniform baseline
-  neighbor_expansion: 0       # How many neighbors around high-gradient intervals
-  gradient_threshold: 0.7     # Percentile for "high gradient" (0.7 = top 30%)
-  power: 2.0                  # Gradient emphasis (>1 = more aggressive)
+  batch_size_bc: 450
+  interp_ratio: 0.30
+  neighbor_ratio: 0.00
+  baseline_ratio: 0.70
+  neighbor_expansion: 0
+  gradient_threshold: 0.7
+  power: 2.0
 
 # ============================================================================
 # OPTIMIZATION & WEIGHT MANAGEMENT
 # ============================================================================
 optimization:
-  weight_update_freq: 10000000000  # Update weights every N epochs (1e10 = fixed)
-  weight_lr: 0.1                   # Learning rate for weight updates
-  use_initial_scales: true         # Use initial scale-based weights
-  use_amp: false                   # Mixed precision training (faster, less memory)
-  use_multi_gpu: true              # Use DataParallel if multiple GPUs available
-  grad_accumulation_steps: 1       # Gradient accumulation for larger effective batch
+  weight_update_freq: 10000000000  # Fixed weights (no adaptive updates)
+  weight_lr: 0.1
+  use_initial_scales: true
+  use_amp: false
+  use_multi_gpu: true
+  grad_accumulation_steps: 1
 
 # ============================================================================
 # CHECKPOINTING
 # ============================================================================
 checkpointing:
-  dir: 'checkpoints_train'
-  freq: 10000                  # Save checkpoint every N epochs (null = no checkpointing)
-  keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
+  dir: 'checkpoints_finetune'  # Different from base training
+  freq: 2000
+  keep_last_n: 3
 
 # ============================================================================
 # PHYSICS PARAMETERS
 # ============================================================================
+# IMPORTANT: These MUST match your base training checkpoint!
 physics:
-  Sy: 0.3                     # Specific yield
-  zr: 0.5                     # Root zone depth [m]
-  L: 4.0                      # Characteristic length [m]
-  S_max: 1.0e-7               # Maximum sink term [1/s]
-  zb_initial: 6.1             # Initial water table depth [m]
-  ic_type: 'obs'      # Initial condition type: 'obs', 'linear', 'hydrostatic'
+  Sy: 0.3
+  zr: 0.5
+  L: 4.0
+  S_max: 1.0e-7
+  zb_initial: 6.1    # Adjust if needed for the new time period
+  ic_type: 'obs'
 
 # ============================================================================
 # OUTPUT CONFIGURATION
 # ============================================================================
 output:
-  dir: 'outputs'
+  dir: 'outputs_finetune'

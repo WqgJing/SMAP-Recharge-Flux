@@ -1,51 +1,65 @@
 # ============================================================================
-# BASELINE CONFIGURATION - Forward PINN Training
+# US-UAF 2019 CONFIGURATION - Forward PINN Training
 # ============================================================================
-# This config file centralizes ALL hyperparameters for PINN training.
-# Copy and modify this file for different experiments.
+# This config demonstrates how to use the column mapping feature for different
+# data formats. The US-Uaf data has different column names and units compared
+# to the Calhoun CCZO data.
 
 # ============================================================================
 # DATA CONFIGURATION
 # ============================================================================
 data:
-  path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
-  start_date: '2017-05-1'
-  end_date: '2017-05-19'
+  path: 'data/US-Uaf_2019_May-Sep_LE_SWC_WTD.xlsx'
+  start_date: '2019-05-01'
+  end_date: '2019-05-31'  # Adjust as needed
   interpolate: true
   max_gap_hours: 6
 
-  # Column mapping - specifies which columns to use for each depth
-  # This allows the same code to work with different data formats
+  # Column mapping - US-Uaf specific columns
+  # NOTE: You'll need to determine what depths SWC_1_1_1, SWC_1_2_1, etc. represent
+  # Based on the data, these appear to be different sensors/depths
   column_mapping:
-    # Datetime column name (use tuple for multi-level headers)
-    datetime: ['Unnamed: 0_level_0', 'Date Time']
+    # Datetime column name (single-level header)
+    datetime: 'datetime'
 
     # Multi-level header indicator
-    multi_level_header: true
+    multi_level_header: false
 
-    # Unit conversion factor (1.0 for m³/m³, 0.01 for percentage to fraction)
-    unit_conversion: 1.0
+    # Unit conversion factor (0.01 to convert percentage to fraction)
+    unit_conversion: 0.01
 
     # Depth column mappings (depth_name: column_name)
-    # Use tuple for multi-level headers, string for single-level
+    # TODO: Verify what depths these SWC sensors represent!
+    # Currently using gap-filled versions (SWC_PI_F_*) for better data quality
+    # You may need to adjust these mappings based on actual sensor depths
     depths:
-      2cm: ['CR1000_2589', '2cm theta']
-      15cm: ['CR1000_2589', '15cm theta']
-      30cm: ['CR1000_2588', '30cm_theta']
-      40cm: ['CR1000_2589', '40cm theta']
-      60cm: ['CR1000_2588', '60cm_theta']
-      80cm: ['CR1000_2588', '80cm_theta']
+      # Option 1: Use gap-filled data (recommended for fewer NaNs)
+      2cm: 'SWC_PI_F_1_1_1'    # TODO: Verify actual depth
+      15cm: 'SWC_PI_F_1_2_1'   # TODO: Verify actual depth
+      30cm: 'SWC_PI_F_2_1_1'   # TODO: Verify actual depth
+      40cm: 'SWC_PI_F_2_2_1'   # TODO: Verify actual depth
+      60cm: 'SWC_PI_F_2_3_1'   # TODO: Verify actual depth
+      # Note: US-Uaf data only has 5 SWC sensors, not 6 like Calhoun
+      # If you need 6 depths, you'll need to interpolate or use a different approach
+
+      # Option 2: Use raw data (more NaNs, but original measurements)
+      # 2cm: 'SWC_1_1_1'
+      # 15cm: 'SWC_1_2_1'
+      # 30cm: 'SWC_2_1_1'
+      # 40cm: 'SWC_2_2_1'
+      # 60cm: 'SWC_2_3_1'
 
 # ============================================================================
 # SOIL PARAMETERS (van Genuchten-Mualem)
 # ============================================================================
+# NOTE: These are from Calhoun CCZO - you should update these for US-Uaf site!
 soil:
-  theta_s: 0.46    # Saturated water content [-]
-  theta_r: 0.05   # Residual water content [-]
-  alpha: 4       # 1/m (van Genuchten α)
-  n: 1.45           # van Genuchten n (>1)
-  Ks: 2.0e-5       # m/s (saturated conductivity)
-  l: 0.50          # Mualem pore-connectivity parameter
+  theta_s: 0.46    # Saturated water content [-] - UPDATE FOR US-UAF
+  theta_r: 0.05   # Residual water content [-] - UPDATE FOR US-UAF
+  alpha: 4       # 1/m (van Genuchten α) - UPDATE FOR US-UAF
+  n: 1.45           # van Genuchten n (>1) - UPDATE FOR US-UAF
+  Ks: 2.0e-5       # m/s (saturated conductivity) - UPDATE FOR US-UAF
+  l: 0.50          # Mualem pore-connectivity parameter - UPDATE FOR US-UAF
 
 # ============================================================================
 # TRAINING CONFIGURATION
@@ -113,11 +127,11 @@ checkpointing:
 # PHYSICS PARAMETERS
 # ============================================================================
 physics:
-  Sy: 0.3                     # Specific yield
-  zr: 0.5                     # Root zone depth [m]
-  L: 4.0                      # Characteristic length [m]
-  S_max: 1.0e-7               # Maximum sink term [1/s]
-  zb_initial: 6.1             # Initial water table depth [m]
+  Sy: 0.3                     # Specific yield - UPDATE FOR US-UAF
+  zr: 0.5                     # Root zone depth [m] - UPDATE FOR US-UAF
+  L: 4.0                      # Characteristic length [m] - UPDATE FOR US-UAF
+  S_max: 1.0e-7               # Maximum sink term [1/s] - UPDATE FOR US-UAF
+  zb_initial: 6.1             # Initial water table depth [m] - UPDATE FOR US-UAF
   ic_type: 'obs'      # Initial condition type: 'obs', 'linear', 'hydrostatic'
 
 # ============================================================================

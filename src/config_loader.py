@@ -60,6 +60,31 @@ class PINNConfig:
     def max_gap_hours(self) -> int:
         return self._config['data'].get('max_gap_hours', 6)
 
+    @property
+    def column_mapping(self) -> Dict[str, Any]:
+        """
+        Get column mapping configuration for data loading.
+        Converts YAML lists to tuples where needed for pandas column indexing.
+        """
+        mapping = self._config['data'].get('column_mapping', {})
+
+        # Convert list to tuple for datetime column (if it's a list)
+        if 'datetime' in mapping and isinstance(mapping['datetime'], list):
+            mapping = mapping.copy()  # Don't modify original
+            mapping['datetime'] = tuple(mapping['datetime'])
+
+        # Convert lists to tuples for depth columns
+        if 'depths' in mapping:
+            depths = {}
+            for depth_name, col_name in mapping['depths'].items():
+                if isinstance(col_name, list):
+                    depths[depth_name] = tuple(col_name)
+                else:
+                    depths[depth_name] = col_name
+            mapping['depths'] = depths
+
+        return mapping
+
     # ========== Soil Parameters ==========
     @property
     def soil_params(self) -> Dict[str, float]:
