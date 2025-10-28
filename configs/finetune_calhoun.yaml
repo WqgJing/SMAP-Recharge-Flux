@@ -1,0 +1,122 @@
+# ============================================================================
+# FINE-TUNING CONFIGURATION - Calhoun CCZO Data
+# ============================================================================
+# This config is for fine-tuning a pre-trained model on a NEW time period
+# The date range should be DIFFERENT from your base training period
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+data:
+  path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
+  # Fine-tuning period (different from baseline training)
+  start_date: '2017-05-20'  # After baseline training period
+  end_date: '2017-05-31'    # ~11 days for fine-tuning
+  interpolate: true
+  max_gap_hours: 6
+
+  # Column mapping - same as baseline (Calhoun data)
+  column_mapping:
+    datetime: ['Unnamed: 0_level_0', 'Date Time']
+    multi_level_header: true
+    unit_conversion: 1.0
+    depths:
+      2cm: ['CR1000_2589', '2cm theta']
+      15cm: ['CR1000_2589', '15cm theta']
+      30cm: ['CR1000_2588', '30cm_theta']
+      40cm: ['CR1000_2589', '40cm theta']
+      60cm: ['CR1000_2588', '60cm_theta']
+      80cm: ['CR1000_2588', '80cm_theta']
+
+# ============================================================================
+# SOIL PARAMETERS (van Genuchten-Mualem)
+# ============================================================================
+# IMPORTANT: These MUST match your base training checkpoint!
+soil:
+  theta_s: 0.46    # Saturated water content [-]
+  theta_r: 0.05   # Residual water content [-]
+  alpha: 4       # 1/m (van Genuchten α)
+  n: 1.45           # van Genuchten n (>1)
+  Ks: 2.0e-5       # m/s (saturated conductivity)
+  l: 0.50          # Mualem pore-connectivity parameter
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training:
+  n_epochs: 10000      # Fewer epochs than base training
+  learning_rate: 1.0e-4  # Lower LR than base training (was 1.0e-4 or 5.0e-4)
+  device: 'auto'
+  seed: 42
+
+# ============================================================================
+# NETWORK ARCHITECTURE
+# ============================================================================
+# IMPORTANT: These MUST match your base training checkpoint!
+network:
+  h_net:
+    hidden_dim: 64
+    num_layers: 4
+  zb_net:
+    hidden_dim: 32
+    num_layers: 3
+
+# ============================================================================
+# CACHE POOL & BATCH SAMPLING (PDE Collocation)
+# ============================================================================
+sampling:
+  cache_size: 10000
+  batch_size: 500
+  resample_freq: 10000
+  boundary_ratio: 0.0      # Uniform sampling for fine-tuning
+  high_residual_ratio: 0.6
+  temperature: 0.3
+
+# ============================================================================
+# BOUNDARY CONDITION SAMPLING (Gradient-Based)
+# ============================================================================
+boundary_sampling:
+  batch_size_bc: 450
+  interp_ratio: 0.30
+  neighbor_ratio: 0.00
+  baseline_ratio: 0.70
+  neighbor_expansion: 0
+  gradient_threshold: 0.7
+  power: 2.0
+
+# ============================================================================
+# OPTIMIZATION & WEIGHT MANAGEMENT
+# ============================================================================
+optimization:
+  weight_update_freq: 10000000000  # Fixed weights (no adaptive updates)
+  weight_lr: 0.1
+  use_initial_scales: true
+  use_amp: false
+  use_multi_gpu: true
+  grad_accumulation_steps: 1
+
+# ============================================================================
+# CHECKPOINTING
+# ============================================================================
+checkpointing:
+  dir: 'checkpoints_finetune'  # Different from base training
+  freq: 2000
+  keep_last_n: 3
+
+# ============================================================================
+# PHYSICS PARAMETERS
+# ============================================================================
+# IMPORTANT: These MUST match your base training checkpoint!
+physics:
+  Sy: 0.3
+  zr: 0.5
+  L: 4.0
+  S_max: 1.0e-7
+  zb_initial: 6.1    # Adjust if needed for the new time period
+  ic_type: 'obs'
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output:
+  dir: 'outputs_finetune'

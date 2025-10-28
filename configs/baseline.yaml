@@ -14,6 +14,28 @@ data:
   interpolate: true
   max_gap_hours: 6
 
+  # Column mapping - specifies which columns to use for each depth
+  # This allows the same code to work with different data formats
+  column_mapping:
+    # Datetime column name (use tuple for multi-level headers)
+    datetime: ['Unnamed: 0_level_0', 'Date Time']
+
+    # Multi-level header indicator
+    multi_level_header: true
+
+    # Unit conversion factor (1.0 for m³/m³, 0.01 for percentage to fraction)
+    unit_conversion: 1.0
+
+    # Depth column mappings (depth_name: column_name)
+    # Use tuple for multi-level headers, string for single-level
+    depths:
+      2cm: ['CR1000_2589', '2cm theta']
+      15cm: ['CR1000_2589', '15cm theta']
+      30cm: ['CR1000_2588', '30cm_theta']
+      40cm: ['CR1000_2589', '40cm theta']
+      60cm: ['CR1000_2588', '60cm_theta']
+      80cm: ['CR1000_2588', '80cm_theta']
+
 # ============================================================================
 # SOIL PARAMETERS (van Genuchten-Mualem)
 # ============================================================================

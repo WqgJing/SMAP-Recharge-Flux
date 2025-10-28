@@ -372,6 +372,288 @@ def load_calhoun_soil_moisture(
     }
 
 
+def load_soil_moisture(
+    filepath,
+    column_mapping,
+    interpolate=True,
+    max_gap_hours=6,
+    start_date=None,
+    end_date=None,
+    start_day=None,
+    duration_days=None,
+    verbose=True
+):
+    """
+    Generic soil moisture data loader with configurable column mappings
+
+    Args:
+        filepath: path to Excel file
+        column_mapping: dict specifying column names for each depth and datetime
+            Example:
+            {
+                'datetime': 'TIMESTAMP',  # or ('Unnamed: 0_level_0', 'Date Time') for multi-level
+                'depths': {
+                    '2cm': 'VWC01_Avg',  # or ('CR1000_2589', '2cm theta')
+                    '15cm': 'VWC02_Avg',
+                    '30cm': 'VWC03_Avg',
+                    '40cm': 'VWC04_Avg',
+                    '60cm': 'VWC05_Avg',
+                    '80cm': 'VWC06_Avg',
+                },
+                'unit_conversion': 1.0,  # Multiply values by this (e.g., 0.01 for percentage to fraction)
+                'multi_level_header': False,  # True if Excel has multi-level headers
+            }
+        interpolate: whether to interpolate missing values (default: True)
+        max_gap_hours: maximum gap to interpolate in hours (default: 6)
+        start_date: starting date for subset (datetime or str 'YYYY-MM-DD', default: None = use all)
+        end_date: ending date for subset (datetime or str 'YYYY-MM-DD', default: None = use all)
+        start_day: starting day offset from first data point (int, default: None)
+        duration_days: duration in days from start_day (int, default: None)
+        verbose: print progress and statistics (default: True)
+
+    Returns:
+        dict with keys:
+            - 'datetime': pandas datetime index
+            - 'times_seconds': time in seconds since start
+            - 'theta_2cm', 'theta_15cm', etc.: soil moisture at each depth
+            - 'depths_names': list of depth names
+            - 'interpolation_stats': dict of interpolation statistics
+    """
+
+    if verbose:
+        print("="*70)
+        print("LOADING SOIL MOISTURE DATA (GENERIC LOADER)")
+        print("="*70)
+
+    # Load Excel file
+    if column_mapping.get('multi_level_header', False):
+        df = pd.read_excel(filepath, header=[0,1])
+    else:
+        df = pd.read_excel(filepath)
+
+    # Extract datetime column
+    datetime_col_name = column_mapping['datetime']
+    if isinstance(datetime_col_name, tuple):
+        datetime_col = df[datetime_col_name]
+    else:
+        datetime_col = df[datetime_col_name]
+
+    # Extract soil moisture columns at different depths
+    depths_mapping = column_mapping['depths']
+    unit_conversion = column_mapping.get('unit_conversion', 1.0)
+
+    # Handle potential header rows for multi-level headers FIRST
+    if column_mapping.get('multi_level_header', False):
+        datetime_col = datetime_col.iloc[2:]
+
+    # Dictionary to store raw theta values
+    theta_raw_dict = {}
+    depths_names = list(depths_mapping.keys())
+
+    for depth_name, col_name in depths_mapping.items():
+        if isinstance(col_name, tuple):
+            theta_values = df[col_name].values
+        else:
+            theta_values = df[col_name].values
+
+        # Remove header rows for multi-level headers
+        if column_mapping.get('multi_level_header', False):
+            theta_values = theta_values[2:]
+
+        # Ensure it's a numpy array before unit conversion
+        theta_values = np.array(theta_values, dtype=float)
+
+        # Apply unit conversion
+        theta_values = theta_values * unit_conversion
+        theta_raw_dict[depth_name] = theta_values
+
+    # Convert to datetime
+    datetime_col = pd.to_datetime(datetime_col).reset_index(drop=True)
+
+    if verbose:
+        print(f"\nData loaded:")
+        print(f"  Total records: {len(datetime_col)}")
+
+        print(f"  Time range: {datetime_col.iloc[0]} to {datetime_col.iloc[-1]}")
+        print(f"  Duration: ~{(datetime_col.iloc[-1] - datetime_col.iloc[0]).days} days")
+
+        # Calculate temporal resolution
+        if len(datetime_col) > 1:
+            time_diff = (datetime_col.iloc[1] - datetime_col.iloc[0]).total_seconds()
+            if time_diff < 60:
+                print(f"  Resolution: {time_diff:.0f} seconds")
+            elif time_diff < 3600:
+                print(f"  Resolution: {time_diff/60:.0f} minutes")
+            else:
+                print(f"  Resolution: {time_diff/3600:.1f} hours")
+
+    # Replace missing value codes with NaN
+    if verbose:
+        print("\n" + "="*70)
+        print("REPLACING MISSING VALUE CODES (-9999, -6999) WITH NaN")
+        print("="*70)
+
+    for depth_name in depths_names:
+        theta_raw_dict[depth_name] = replace_missing_codes(theta_raw_dict[depth_name])
+
+    if verbose:
+        print("Missing value codes replaced with NaN")
+
+    # Convert datetime to seconds since start
+    t_start = datetime_col.iloc[0]
+    times_seconds = (datetime_col - t_start).dt.total_seconds().values
+
+    # ============================================================================
+    # TIME PERIOD SELECTION
+    # ============================================================================
+
+    # Validate that only one selection method is used
+    if (start_date is not None or end_date is not None) and (start_day is not None or duration_days is not None):
+        raise ValueError("Cannot use both date-based (start_date/end_date) and day-based (start_day/duration_days) selection. Choose one method.")
+
+    # Apply time period selection
+    time_mask = np.ones(len(datetime_col), dtype=bool)  # Default: select all
+
+    if start_date is not None or end_date is not None:
+        # Date-based selection
+        if start_date is not None:
+            if isinstance(start_date, str):
+                start_date = pd.to_datetime(start_date)
+            time_mask &= (datetime_col >= start_date)
+
+        if end_date is not None:
+            if isinstance(end_date, str):
+                end_date = pd.to_datetime(end_date)
+            time_mask &= (datetime_col <= end_date)
+
+        if verbose:
+            print(f"\nTime period selection (date-based):")
+            print(f"  Start date: {start_date if start_date else 'first available'}")
+            print(f"  End date:   {end_date if end_date else 'last available'}")
+
+    elif start_day is not None or duration_days is not None:
+        # Day-based selection (relative to first data point)
+        if start_day is None:
+            start_day = 0
+
+        start_seconds = start_day * 86400
+
+        if duration_days is not None:
+            end_seconds = start_seconds + duration_days * 86400
+            time_mask = (times_seconds >= start_seconds) & (times_seconds <= end_seconds)
+
+            if verbose:
+                print(f"\nTime period selection (day-based):")
+                print(f"  Start day:  {start_day} (offset from first data point)")
+                print(f"  Duration:   {duration_days} days")
+                print(f"  End day:    {start_day + duration_days}")
+        else:
+            time_mask = times_seconds >= start_seconds
+
+            if verbose:
+                print(f"\nTime period selection (day-based):")
+                print(f"  Start day:  {start_day} (offset from first data point)")
+                print(f"  Duration:   all remaining data")
+
+    # Apply time mask to all data
+    if not time_mask.all():
+        datetime_col = datetime_col[time_mask].reset_index(drop=True)
+        times_seconds = times_seconds[time_mask]
+        for depth_name in depths_names:
+            theta_raw_dict[depth_name] = theta_raw_dict[depth_name][time_mask]
+
+        # Recalculate times_seconds from new start
+        t_start = datetime_col.iloc[0]
+        times_seconds = (datetime_col - datetime_col.iloc[0]).dt.total_seconds().values
+
+        if verbose:
+            print(f"  Selected:   {len(datetime_col)} points")
+            print(f"  Date range: {datetime_col.iloc[0]} to {datetime_col.iloc[-1]}")
+            print(f"  Duration:   {times_seconds[-1]/86400:.1f} days")
+
+    # Print raw data quality
+    if verbose:
+        print(f"\nRaw data quality (after replacing missing codes with NaN):")
+        print("-"*70)
+        for depth_name in depths_names:
+            theta_raw = theta_raw_dict[depth_name]
+            n_total = len(theta_raw)
+            n_nan = pd.isna(theta_raw).sum()
+            n_valid = n_total - n_nan
+            pct_nan = (n_nan / n_total) * 100
+            if n_valid > 0:
+                print(f"{depth_name:6s}: {n_valid:5d} valid, {n_nan:5d} NaN ({pct_nan:5.2f}%), "
+                      f"range=[{np.nanmin(theta_raw):.4f}, {np.nanmax(theta_raw):.4f}]")
+            else:
+                print(f"{depth_name:6s}: {n_valid:5d} valid, {n_nan:5d} NaN ({pct_nan:5.2f}%) - ALL MISSING!")
+
+    # Interpolate missing values if requested
+    interpolation_stats = {}
+    theta_clean_dict = {}
+
+    if interpolate:
+        if verbose:
+            print("\n" + "="*70)
+            print("DATA CLEANING: INTERPOLATING MISSING VALUES")
+            print("="*70)
+            print(f"\nInterpolating with max gap = {max_gap_hours} hours:")
+            print("-"*70)
+
+        for depth_name in depths_names:
+            theta_raw = theta_raw_dict[depth_name]
+            theta_clean, n_filled = interpolate_missing_data(times_seconds, theta_raw, max_gap_hours=max_gap_hours)
+            theta_clean_dict[depth_name] = theta_clean
+
+            if verbose:
+                print(f"{depth_name:6s}: {n_filled:5d} values interpolated")
+
+            # Store interpolation statistics
+            n_total = len(theta_clean)
+            n_nan_before = pd.isna(theta_raw).sum()
+            n_nan_after = pd.isna(theta_clean).sum()
+
+            interpolation_stats[depth_name] = {
+                'n_filled': n_filled,
+                'n_nan_before': n_nan_before,
+                'n_nan_after': n_nan_after,
+                'completeness': (n_total - n_nan_after) / n_total * 100
+            }
+
+        if verbose:
+            print("\n" + "="*70)
+            print("DATA QUALITY AFTER CLEANING")
+            print("="*70)
+            for depth_name, stats in interpolation_stats.items():
+                n_total = len(theta_clean_dict[depth_name])
+                n_valid = n_total - stats['n_nan_after']
+                print(f"{depth_name:6s}: {n_valid:5d} valid ({stats['completeness']:5.1f}%), "
+                      f"{stats['n_nan_after']:5d} NaN remaining, "
+                      f"{stats['n_filled']:5d} filled")
+    else:
+        # No interpolation
+        theta_clean_dict = theta_raw_dict.copy()
+
+    if verbose:
+        print("\n" + "="*70)
+        print("DATA LOADING COMPLETE")
+        print("="*70)
+
+    # Build return dictionary with standardized depth names
+    result = {
+        'datetime': datetime_col,
+        'times_seconds': times_seconds,
+        'depths_names': depths_names,
+        'raw_data': [theta_raw_dict[d] for d in depths_names],
+        'interpolation_stats': interpolation_stats if interpolate else None
+    }
+
+    # Add theta values with standardized names
+    for depth_name in depths_names:
+        result[f'theta_{depth_name}'] = theta_clean_dict[depth_name]
+
+    return result
+
+
 def prepare_surface_bc_data(
     soil_data,
     depth='2cm',
