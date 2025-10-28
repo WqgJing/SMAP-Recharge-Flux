@@ -51,7 +51,7 @@ soil:
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 10000
+  n_epochs: 5000
   learning_rate: 1.0e-4
   device: 'auto'      # 'auto', 'cuda', or 'cpu'
   seed: 44

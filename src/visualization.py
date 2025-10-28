@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, device='cpu', obs_data=None):
+def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, device='cpu', obs_data=None, wtd_data=None):
     """
     Comprehensive plotting with 6 subplots - NORMALIZED VERSION
 
@@ -16,6 +16,8 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
         device: Device for computation
         obs_data: Optional dictionary with observation data at different depths
                  Format: {'times': array, 'depths': [z1, z2, ...], 'theta': [theta1, theta2, ...]}
+        wtd_data: Optional dictionary with observed water table depth data
+                 Format: {'times': array, 'wtd': array} - both should be same length
     """
     model.eval()
 
@@ -136,9 +138,20 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
     axs[0, 0].legend(loc="lower right")
     plt.colorbar(im1, ax=axs[0, 0], label="h [m]")
 
-    # Subplot 2: zb(t) time series
-    axs[0, 1].plot(t_lin.cpu().numpy() / 86400, zb_vals, "b-", lw=2)
-    axs[0, 1].set_title("Water Table Depth z_b(t)")
+    # Subplot 2: zb(t) time series with optional WTD validation
+    axs[0, 1].plot(t_lin.cpu().numpy() / 86400, zb_vals, "b-", lw=2, label="Modeled zb(t)")
+
+    # Add observed WTD if available
+    if wtd_data is not None:
+        wtd_times = wtd_data['times']  # Time in seconds
+        wtd_vals = wtd_data['wtd']     # WTD in meters (positive downward)
+        wtd_days = wtd_times / 86400.0
+        axs[0, 1].plot(wtd_days, wtd_vals, 'ro', markersize=4, alpha=0.6, label="Observed WTD")
+        axs[0, 1].legend()
+        axs[0, 1].set_title("Water Table Depth: zb(t) vs WTD")
+    else:
+        axs[0, 1].set_title("Water Table Depth z_b(t)")
+
     axs[0, 1].set_xlabel("Time [days]")
     axs[0, 1].set_ylabel("z_b [m] (positive downward)")
     axs[0, 1].grid(True, alpha=0.3)
@@ -260,6 +273,8 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
             t_days = obs_times / 86400.0
 
             # Plot both observed and PINN-derived theta
+            # Note: We plot all points including NaN - matplotlib will show gaps where data is missing
+            # This is intentional to show data quality issues
             depth_cm = int(abs(z_obs) * 100)
             axs[1, 2].plot(t_days, theta_obs, color=colors[i % len(colors)],
                           linewidth=2, alpha=0.7, label=f'{depth_cm}cm obs')
@@ -315,6 +330,34 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
                 mae = np.mean(np.abs(theta_pinn_valid - theta_obs_valid))
                 depth_cm = int(abs(z_obs) * 100)
                 print(f"  {depth_cm:3d}cm: RMSE = {rmse:.6f} m³/m³, MAE = {mae:.6f} m³/m³")
+
+    # Print WTD validation statistics if available
+    if wtd_data is not None:
+        print("\nWater Table Depth (WTD) Validation Statistics:")
+        wtd_times = wtd_data['times']
+        wtd_obs = wtd_data['wtd']
+
+        # Get modeled zb at observed times
+        t_wtd_tensor = torch.tensor(wtd_times, dtype=torch.float32).view(-1, 1).to(device)
+        with torch.no_grad():
+            zb_modeled = model.predict_water_table(t_wtd_tensor).cpu().numpy().flatten()
+
+        # Remove NaN values for comparison
+        wtd_obs_np = np.array(wtd_obs, dtype=np.float64)
+        valid_mask = ~np.isnan(wtd_obs_np)
+        wtd_obs_valid = wtd_obs_np[valid_mask]
+        zb_modeled_valid = zb_modeled[valid_mask]
+
+        if len(wtd_obs_valid) > 0:
+            rmse = np.sqrt(np.mean((zb_modeled_valid - wtd_obs_valid)**2))
+            mae = np.mean(np.abs(zb_modeled_valid - wtd_obs_valid))
+            bias = np.mean(zb_modeled_valid - wtd_obs_valid)
+            print(f"  RMSE = {rmse:.4f} m")
+            print(f"  MAE  = {mae:.4f} m")
+            print(f"  Bias = {bias:.4f} m (positive = model predicts deeper WT)")
+            print(f"  Valid data points: {len(wtd_obs_valid)} / {len(wtd_obs)}")
+        else:
+            print("  No valid WTD data for comparison")
 
 
 def plot_training_losses(losses_pool, comps_pool, sample_losses=None, sample_comps=None, sample_epochs=None):
@@ -425,3 +468,54 @@ def plot_training_losses(losses_pool, comps_pool, sample_losses=None, sample_com
 
     plt.tight_layout()
     plt.show()
+
+
+# ============================================================================
+# NEW UNIFIED API - Dataset-Based Visualization Functions
+# ============================================================================
+
+def plot_results(model, dataset, n_t=200, n_z=100, device='cpu'):
+    """
+    Plot comprehensive results using unified PINNDataset.
+
+    This is the NEW simplified API that automatically handles:
+    - Any number of observation depths
+    - Optional WTD validation
+    - Variable data availability
+
+    Args:
+        model: Trained PINN model
+        dataset: PINNDataset object (contains all data)
+        n_t: Number of time points for visualization grid
+        n_z: Number of depth points for visualization grid
+        device: Device for computation
+
+    Example:
+        dataset = PINNDataset('configs/us_uaf_2019.yaml')
+        model = train_pinn(dataset)
+        plot_results(model, dataset)
+    """
+    # Call the old function with data extracted from dataset
+    bc_data = dataset.get_bc_data()
+    soil_params = dataset.soil_params
+    obs_data = dataset.get_obs_data_for_viz()
+    wtd_data = dataset.get_wtd_data_for_viz()
+
+    # Use existing comprehensive plotting with WTD support
+    plot_comprehensive_results(
+        model, bc_data, soil_params, n_t, n_z, device, obs_data, wtd_data
+    )
+
+
+def plot_losses(losses, loss_components, sample_losses, sample_components, sample_epochs):
+    """
+    Wrapper for plot_training_losses that works with dataset outputs.
+
+    Args:
+        losses: Total loss history
+        loss_components: Dict of loss component histories
+        sample_losses: Sample-based loss history
+        sample_components: Sample-based component histories
+        sample_epochs: Epochs where samples were taken
+    """
+    plot_training_losses(losses, loss_components, sample_losses, sample_components, sample_epochs)
