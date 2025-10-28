@@ -18,6 +18,11 @@ checkpoints_finetune/
 pinn_logs/
 logs/
 
-# Data (uncomment if you don't want to track data files)
-# data/
+# Data files
+# Large AmeriFlux CSV files (should be downloaded separately)
+data/AMF_*.csv
+
+# Keep smaller data files tracked
+!data/DeepWellWY2017.csv
+!data/CalhounPrecipWY2015.csv
 
