@@ -1,0 +1,158 @@
+# ============================================================================
+# US-CRT (Curtice Walter-Berger Cropland) 2013 CONFIGURATION - Forward PINN
+# ============================================================================
+# Site: US-CRT (Curtice Walter-Berger Cropland, Ohio)
+# Location: Agricultural cropland (corn-soybean rotation)
+# Data source: AmeriFlux BASE product (HH = half-hourly)
+# Version: 5-5
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+data:
+  path: 'data/AMF_US-CRT_BASE_HH_5-5.csv'
+  start_date: '2013-09-01'   # Start of 2013
+  end_date: '2013-11-1'     # End of 2013 (1 year)
+  interpolate: true
+  max_gap_hours: 6
+
+  # Column mapping - US-CRT AmeriFlux format
+  column_mapping:
+    # Datetime column (AmeriFlux format: YYYYMMDDHHMM)
+    datetime: 'TIMESTAMP_START'
+
+    # Single-level header
+    multi_level_header: false
+
+    # Unit conversion: Data is in percentage (0-100), convert to fraction
+    unit_conversion: 0.01
+
+    # Depth column mappings
+    # US-CRT has 1 SWC sensor (depth not specified in metadata)
+    # Assuming shallow measurement typical for cropland monitoring
+    depths:
+      10cm: 'SWC'    # Surface BC - single sensor (estimated depth)
+
+    # Water table depth
+    wtd: 'WTD'
+    wtd_sign: -1.0  # Data is negative (below datum), convert to positive downward
+
+# ============================================================================
+# SOIL PARAMETERS (van Genuchten-Mualem)
+# ============================================================================
+# US-CRT is agricultural cropland with silt loam soils (Hoytville series)
+# Reference: https://ameriflux.lbl.gov/sites/siteinfo/US-CRT
+soil:
+  theta_s: 0.45    # Saturated water content [-] (silt loam)
+  theta_r: 0.067   # Residual water content [-] (silt loam)
+  alpha: 2.0       # van Genuchten α [1/m] (silt loam)
+  n: 1.41          # van Genuchten n (>1) [-] (silt loam)
+  Ks: 4.0e-6       # Saturated hydraulic conductivity [m/s] (moderate)
+  l: 0.5           # Mualem pore-connectivity parameter [-]
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training:
+  n_epochs: 5000
+  learning_rate: 1.0e-4
+  device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
+  seed: 42
+
+# ============================================================================
+# NETWORK ARCHITECTURE
+# ============================================================================
+network:
+  h_net:              # Pressure head network
+    hidden_dim: 64
+    num_layers: 4
+  zb_net:             # Water table network
+    hidden_dim: 32
+    num_layers: 3
+
+# ============================================================================
+# CACHE POOL & BATCH SAMPLING (PDE Collocation)
+# ============================================================================
+sampling:
+  cache_size: 10000           # Total candidate points in pool
+  batch_size: 500             # Points sampled per iteration
+  resample_freq: 10000        # Update residuals every N epochs
+  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
+  temperature: 0.3            # Softmax temperature (lower = more aggressive)
+
+# ============================================================================
+# BOUNDARY CONDITION SAMPLING (Gradient-Based)
+# ============================================================================
+boundary_sampling:
+  batch_size_bc: 450          # Dedicated BC points per iteration
+  interp_ratio: 0.30          # Fraction from gradient-interpolated points
+  neighbor_ratio: 0.00        # Fraction from neighbors of high-gradient regions
+  baseline_ratio: 0.70        # Fraction from uniform baseline
+  neighbor_expansion: 0       # How many neighbors around high-gradient intervals
+  gradient_threshold: 0.7     # Percentile for "high gradient" (0.7 = top 30%)
+  power: 2.0                  # Gradient emphasis (>1 = more aggressive)
+
+# ============================================================================
+# OPTIMIZATION & WEIGHT MANAGEMENT
+# ============================================================================
+optimization:
+  weight_update_freq: 10000000000  # Update weights every N epochs (1e10 = fixed)
+  weight_lr: 0.1                   # Learning rate for weight updates
+  use_initial_scales: true         # Use initial scale-based weights
+  use_amp: false                   # Mixed precision training (faster, less memory)
+  use_multi_gpu: true              # Use DataParallel if multiple GPUs available
+  grad_accumulation_steps: 1       # Gradient accumulation for larger effective batch
+
+# ============================================================================
+# CHECKPOINTING
+# ============================================================================
+checkpointing:
+  dir: 'checkpoints_train'
+  freq: 1000                  # Save checkpoint every N epochs
+  keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
+
+# ============================================================================
+# PHYSICS PARAMETERS
+# ============================================================================
+physics:
+  Sy: 0.18                    # Specific yield [-] (silt loam)
+  zr: 0.5                     # Root zone depth [m] (corn/soybean)
+  L: 3.0                      # Characteristic length [m]
+  S_max: 1.5e-7               # Maximum sink term [1/s]
+  zb_initial: 1.5             # Initial water table depth [m] (moderate depth)
+  ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output:
+  dir: 'outputs'
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# Site Information:
+#   - Location: Ohio (41.6285°N, 83.3471°W)
+#   - Elevation: 219 m
+#   - Climate: Humid continental
+#   - Vegetation: Cropland (corn-soybean rotation)
+#   - Soil: Hoytville series (silt loam, poorly drained)
+#
+# Data Notes:
+#   - AmeriFlux BASE product
+#   - SWC data: 100% coverage in 2013 (excellent quality)
+#   - WTD data: 100% coverage in 2013
+#   - Missing values coded as -9999
+#   - WTD is negative (below datum reference)
+#   - High soil moisture (25-66%) indicates poorly drained agricultural soil
+#
+# Recommended Actions:
+#   1. Verify actual SWC sensor depth from site documentation
+#   2. Consider tile drainage effects common in Midwest croplands
+#   3. Update soil parameters if site measurements available
+#   4. Account for seasonal crop effects on ET and root water uptake
+#
+# References:
+#   - AmeriFlux site info: https://ameriflux.lbl.gov/sites/siteinfo/US-CRT
+#   - Hoytville soil series: USDA-NRCS soil database

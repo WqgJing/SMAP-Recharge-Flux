@@ -9,9 +9,9 @@
 # DATA CONFIGURATION
 # ============================================================================
 data:
-  path: 'data/US-Uaf_2019_May-Sep_LE_SWC_WTD.xlsx'
-  start_date: '2019-07-30'  # July 30, 2019
-  end_date: '2019-08-13'    # August 13, 2019 (15 days)
+  path: 'data/US-Uaf_2020_Jun-Sep_LE_SWC_WTD.xlsx'
+  start_date: '2020-07-01'  # July 30, 2019
+  end_date: '2020-08-1'    # August 13, 2019 (15 days)
   interpolate: true
   max_gap_hours: 6
 
@@ -32,10 +32,7 @@ data:
     # SWC_1_2_1 is the SURFACE BC (first depth in the list = surface)
     depths:
       2cm: 'SWC_1_2_1'   # Surface BC - this will be used for theta(z=0,t)
-      15cm: 'SWC_1_1_1'  # Depth sensor 1
-      30cm: 'SWC_2_1_1'  # Depth sensor 2
-      40cm: 'SWC_2_2_1'  # Depth sensor 3
-      60cm: 'SWC_2_3_1'  # Depth sensor 4
+
       # Note: US-Uaf data has 5 SWC sensors total
 
     # Water table depth (optional - for validation only)
@@ -47,7 +44,7 @@ data:
 # ============================================================================
 # NOTE: These are from Calhoun CCZO - you should update these for US-Uaf site!
 soil:
-  theta_s: 0.46    # Saturated water content [-] - UPDATE FOR US-UAF
+  theta_s: 1    # Saturated water content [-] - UPDATE FOR US-UAF
   theta_r: 0.05   # Residual water content [-] - UPDATE FOR US-UAF
   alpha: 4       # 1/m (van Genuchten α) - UPDATE FOR US-UAF
   n: 1.45           # van Genuchten n (>1) - UPDATE FOR US-UAF

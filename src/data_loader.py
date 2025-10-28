@@ -17,13 +17,13 @@ def replace_missing_codes(data, missing_codes=None):
 
     Args:
         data: numpy array with potential missing value codes
-        missing_codes: list of missing value codes (default: [-9999, -9999.0, -6999, -6999.0])
+        missing_codes: list of missing value codes (default: [-9999, -9999.0, -6999, -6999.0, 9999, 9999.0])
 
     Returns:
         numpy array with missing codes replaced by NaN
     """
     if missing_codes is None:
-        missing_codes = [-9999, -9999.0, -6999, -6999.0]
+        missing_codes = [-9999, -9999.0, -6999, -6999.0, 9999, 9999.0]
 
     data_copy = data.copy()
     for code in missing_codes:
@@ -425,11 +425,27 @@ def load_soil_moisture(
         print("LOADING SOIL MOISTURE DATA (GENERIC LOADER)")
         print("="*70)
 
-    # Load Excel file
-    if column_mapping.get('multi_level_header', False):
-        df = pd.read_excel(filepath, header=[0,1])
+    # Detect file format by extension
+    file_ext = filepath.lower().split('.')[-1]
+
+    # Load file (CSV or Excel)
+    if file_ext == 'csv':
+        # CSV file (e.g., AmeriFlux data)
+        # Skip header comment lines if present (common in AmeriFlux files)
+        # AmeriFlux files typically have 2 comment lines starting with '#'
+        df = pd.read_csv(filepath, comment='#')
+
+        if verbose:
+            print(f"  File format: CSV")
     else:
-        df = pd.read_excel(filepath)
+        # Excel file
+        if column_mapping.get('multi_level_header', False):
+            df = pd.read_excel(filepath, header=[0,1])
+        else:
+            df = pd.read_excel(filepath)
+
+        if verbose:
+            print(f"  File format: Excel")
 
     # Extract datetime column
     datetime_col_name = column_mapping['datetime']
@@ -460,15 +476,27 @@ def load_soil_moisture(
         if column_mapping.get('multi_level_header', False):
             theta_values = theta_values[2:]
 
-        # Ensure it's a numpy array before unit conversion
+        # Ensure it's a numpy array
         theta_values = np.array(theta_values, dtype=float)
 
-        # Apply unit conversion
-        theta_values = theta_values * unit_conversion
+        # NOTE: Unit conversion will be applied AFTER missing value replacement
+        # to avoid converting -9999 to -99.99 before it can be detected
         theta_raw_dict[depth_name] = theta_values
 
     # Convert to datetime
-    datetime_col = pd.to_datetime(datetime_col).reset_index(drop=True)
+    # Handle AmeriFlux timestamp format (YYYYMMDDHHMM) for CSV files
+    if file_ext == 'csv':
+        # Try to parse as AmeriFlux format first
+        try:
+            datetime_col = pd.to_datetime(datetime_col, format='%Y%m%d%H%M')
+        except (ValueError, TypeError):
+            # Fall back to automatic datetime parsing
+            datetime_col = pd.to_datetime(datetime_col)
+    else:
+        # Excel files use standard datetime parsing
+        datetime_col = pd.to_datetime(datetime_col)
+
+    datetime_col = datetime_col.reset_index(drop=True)
 
     if verbose:
         print(f"\nData loaded:")
@@ -490,7 +518,7 @@ def load_soil_moisture(
     # Replace missing value codes with NaN
     if verbose:
         print("\n" + "="*70)
-        print("REPLACING MISSING VALUE CODES (-9999, -6999) WITH NaN")
+        print("REPLACING MISSING VALUE CODES (-9999, -6999, +9999) WITH NaN")
         print("="*70)
 
     for depth_name in depths_names:
@@ -498,6 +526,14 @@ def load_soil_moisture(
 
     if verbose:
         print("Missing value codes replaced with NaN")
+
+    # Apply unit conversion AFTER missing value replacement
+    # This prevents -9999 from being converted to -99.99 before detection
+    for depth_name in depths_names:
+        theta_raw_dict[depth_name] = theta_raw_dict[depth_name] * unit_conversion
+
+    if verbose and unit_conversion != 1.0:
+        print(f"Unit conversion applied: ×{unit_conversion}")
 
     # Convert datetime to seconds since start
     t_start = datetime_col.iloc[0]

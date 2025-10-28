@@ -9,8 +9,8 @@
 # ============================================================================
 data:
   path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
-  start_date: '2017-05-1'
-  end_date: '2017-05-19'
+  start_date: '2017-05-19'
+  end_date: '2017-05-26'
   interpolate: true
   max_gap_hours: 6
 
@@ -40,18 +40,18 @@ data:
 # SOIL PARAMETERS (van Genuchten-Mualem)
 # ============================================================================
 soil:
-  theta_s: 0.46    # Saturated water content [-]
-  theta_r: 0.05   # Residual water content [-]
-  alpha: 4       # 1/m (van Genuchten α)
-  n: 1.45           # van Genuchten n (>1)
-  Ks: 2.0e-5       # m/s (saturated conductivity)
+  theta_s: 0.40    # Saturated water content [-]
+  theta_r: 0.01   # Residual water content [-]
+  alpha: 0.4       # 1/m (van Genuchten α)
+  n: 1.7           # van Genuchten n (>1)
+  Ks: 1.0e-5       # m/s (saturated conductivity)
   l: 0.50          # Mualem pore-connectivity parameter
 
 # ============================================================================
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 5000
+  n_epochs: 50000
   learning_rate: 1.0e-4
   device: 'auto'      # 'auto', 'cuda', or 'cpu'
   seed: 44
@@ -71,11 +71,11 @@ network:
 # CACHE POOL & BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 10000           # Total candidate points in pool
+  cache_size: 0           # Total candidate points in pool
   batch_size: 500            # Points sampled per iteration
   resample_freq: 10000          # Update residuals every N epochs
-  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
-  high_residual_ratio: 0.6    # Fraction of batch from high-residual regions (0-1)
+  boundary_ratio: 0         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0    # Fraction of batch from high-residual regions (0-1)
   temperature: 0.3            # Softmax temperature (lower = more aggressive)
 
 # ============================================================================
@@ -117,7 +117,7 @@ physics:
   zr: 0.5                     # Root zone depth [m]
   L: 4.0                      # Characteristic length [m]
   S_max: 1.0e-7               # Maximum sink term [1/s]
-  zb_initial: 6.1             # Initial water table depth [m]
+  zb_initial: 10             # Initial water table depth [m]
   ic_type: 'obs'      # Initial condition type: 'obs', 'linear', 'hydrostatic'
 
 # ============================================================================

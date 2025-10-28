@@ -1,0 +1,157 @@
+# ============================================================================
+# US-CLF (Chestnut Ridge Conservation Learning Farm) 2019 CONFIGURATION
+# ============================================================================
+# Site: US-CLF (Chestnut Ridge Conservation Learning Farm, Pennsylvania)
+# Location: Agricultural research farm (conservation tillage)
+# Data source: AmeriFlux BASE product (HH = half-hourly)
+# Version: 1-5
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+data:
+  path: 'data/AMF_US-CLF_BASE_HH_1-5.csv'
+  start_date: '2019-01-01'   # Start of 2019
+  end_date: '2019-12-31'     # End of 2019 (1 year)
+  interpolate: true
+  max_gap_hours: 6
+
+  # Column mapping - US-CLF AmeriFlux format
+  column_mapping:
+    # Datetime column (AmeriFlux format: YYYYMMDDHHMM)
+    datetime: 'TIMESTAMP_START'
+
+    # Single-level header
+    multi_level_header: false
+
+    # Unit conversion: Data is in percentage (0-100), convert to fraction
+    unit_conversion: 0.01
+
+    # Depth column mappings
+    # US-CLF has 1 SWC sensor (depth not specified in metadata)
+    # Assuming shallow measurement typical for agricultural monitoring
+    depths:
+      10cm: 'SWC'    # Surface BC - single sensor (estimated depth)
+
+    # Water table depth
+    wtd: 'WTD'
+    wtd_sign: -1.0  # Data is negative (below datum), convert to positive downward
+
+# ============================================================================
+# SOIL PARAMETERS (van Genuchten-Mualem)
+# ============================================================================
+# US-CLF is conservation tillage cropland with silt loam soils
+# Ridge and valley region of Pennsylvania
+soil:
+  theta_s: 0.43    # Saturated water content [-] (silt loam)
+  theta_r: 0.065   # Residual water content [-] (silt loam)
+  alpha: 2.0       # van Genuchten α [1/m] (silt loam)
+  n: 1.41          # van Genuchten n (>1) [-] (silt loam)
+  Ks: 4.5e-6       # Saturated hydraulic conductivity [m/s] (moderate)
+  l: 0.5           # Mualem pore-connectivity parameter [-]
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training:
+  n_epochs: 5000
+  learning_rate: 1.0e-4
+  device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
+  seed: 42
+
+# ============================================================================
+# NETWORK ARCHITECTURE
+# ============================================================================
+network:
+  h_net:              # Pressure head network
+    hidden_dim: 64
+    num_layers: 4
+  zb_net:             # Water table network
+    hidden_dim: 32
+    num_layers: 3
+
+# ============================================================================
+# CACHE POOL & BATCH SAMPLING (PDE Collocation)
+# ============================================================================
+sampling:
+  cache_size: 10000           # Total candidate points in pool
+  batch_size: 500             # Points sampled per iteration
+  resample_freq: 10000        # Update residuals every N epochs
+  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
+  temperature: 0.3            # Softmax temperature (lower = more aggressive)
+
+# ============================================================================
+# BOUNDARY CONDITION SAMPLING (Gradient-Based)
+# ============================================================================
+boundary_sampling:
+  batch_size_bc: 450          # Dedicated BC points per iteration
+  interp_ratio: 0.30          # Fraction from gradient-interpolated points
+  neighbor_ratio: 0.00        # Fraction from neighbors of high-gradient regions
+  baseline_ratio: 0.70        # Fraction from uniform baseline
+  neighbor_expansion: 0       # How many neighbors around high-gradient intervals
+  gradient_threshold: 0.7     # Percentile for "high gradient" (0.7 = top 30%)
+  power: 2.0                  # Gradient emphasis (>1 = more aggressive)
+
+# ============================================================================
+# OPTIMIZATION & WEIGHT MANAGEMENT
+# ============================================================================
+optimization:
+  weight_update_freq: 10000000000  # Update weights every N epochs (1e10 = fixed)
+  weight_lr: 0.1                   # Learning rate for weight updates
+  use_initial_scales: true         # Use initial scale-based weights
+  use_amp: false                   # Mixed precision training (faster, less memory)
+  use_multi_gpu: true              # Use DataParallel if multiple GPUs available
+  grad_accumulation_steps: 1       # Gradient accumulation for larger effective batch
+
+# ============================================================================
+# CHECKPOINTING
+# ============================================================================
+checkpointing:
+  dir: 'checkpoints_train'
+  freq: 1000                  # Save checkpoint every N epochs
+  keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
+
+# ============================================================================
+# PHYSICS PARAMETERS
+# ============================================================================
+physics:
+  Sy: 0.18                    # Specific yield [-] (silt loam)
+  zr: 0.5                     # Root zone depth [m] (cropland)
+  L: 3.0                      # Characteristic length [m]
+  S_max: 1.5e-7               # Maximum sink term [1/s]
+  zb_initial: 3.5             # Initial water table depth [m] (deeper water table)
+  ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output:
+  dir: 'outputs'
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# Site Information:
+#   - Location: Pennsylvania (40.6266°N, 77.9067°W)
+#   - Elevation: 360 m
+#   - Climate: Humid continental
+#   - Vegetation: Agricultural cropland (conservation tillage practices)
+#   - Soil: Silt loam (ridge and valley physiographic province)
+#
+# Data Notes:
+#   - AmeriFlux BASE product
+#   - SWC data: 88.5% coverage in 2019 (best year)
+#   - WTD data: 95.5% coverage in 2019
+#   - Missing values coded as -9999
+#   - WTD is negative (below datum reference)
+#   - Relatively deep water table (average ~3.5 m)
+#
+# Recommended Actions:
+#   1. Verify actual SWC sensor depth from site documentation
+#   2. Consider conservation tillage effects on infiltration
+#   3. Update soil parameters if site measurements available
+#   4. Account for seasonal crop rotation effects
+#
+# References:
+#   - AmeriFlux site info: https://ameriflux.lbl.gov/sites/siteinfo/US-CLF
