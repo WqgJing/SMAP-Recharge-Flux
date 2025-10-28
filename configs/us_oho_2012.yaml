@@ -1,60 +1,63 @@
 # ============================================================================
-# BASELINE CONFIGURATION - Forward PINN Training
+# US-Oho (Oak Openings) 2012 CONFIGURATION - Forward PINN Training
 # ============================================================================
-# This config file centralizes ALL hyperparameters for PINN training.
-# Copy and modify this file for different experiments.
+# Site: US-Oho (Oak Openings, Ohio)
+# Location: Oak savanna ecosystem
+# Data source: AmeriFlux BASE product (HH = half-hourly)
+# Version: 7-5
 
 # ============================================================================
 # DATA CONFIGURATION
 # ============================================================================
 data:
-  path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
-  start_date: '2017-05-19'
-  end_date: '2017-05-26'
+  path: 'data/AMF_US-Oho_BASE_HH_7-5.csv'
+  start_date: '2012-01-01'   # Start of 2012
+  end_date: '2013-12-31'     # End of 2012 (1 year)
   interpolate: true
   max_gap_hours: 6
 
-  # Column mapping - specifies which columns to use for each depth
-  # This allows the same code to work with different data formats
+  # Column mapping - US-Oho AmeriFlux format
   column_mapping:
-    # Datetime column name (use tuple for multi-level headers)
-    datetime: ['Unnamed: 0_level_0', 'Date Time']
+    # Datetime column (AmeriFlux format: YYYYMMDDHHMM)
+    datetime: 'TIMESTAMP_START'
 
-    # Multi-level header indicator
-    multi_level_header: true
+    # Single-level header
+    multi_level_header: false
 
-    # Unit conversion factor (1.0 for m³/m³, 0.01 for percentage to fraction)
-    unit_conversion: 1.0
+    # Unit conversion: Data is in percentage (0-100), convert to fraction
+    unit_conversion: 0.01
 
-    # Depth column mappings (depth_name: column_name)
-    # Use tuple for multi-level headers, string for single-level
+    # Depth column mappings
+    # US-Oho has 1 SWC sensor (depth not specified in metadata)
+    # Assuming shallow measurement typical for savanna monitoring
     depths:
-      2cm: ['CR1000_2589', '2cm theta']
-      15cm: ['CR1000_2589', '15cm theta']
-      30cm: ['CR1000_2588', '30cm_theta']
-      40cm: ['CR1000_2589', '40cm theta']
-      60cm: ['CR1000_2588', '60cm_theta']
-      80cm: ['CR1000_2588', '80cm_theta']
+      10cm: 'SWC'    # Surface BC - single sensor (estimated depth)
+
+    # Water table depth
+    wtd: 'WTD'
+    wtd_sign: -1.0  # Data is negative (below datum), convert to positive downward
 
 # ============================================================================
 # SOIL PARAMETERS (van Genuchten-Mualem)
 # ============================================================================
+# US-Oho is oak savanna with sandy soils (Toledo series)
+# Northwest Ohio
 soil:
-  theta_s: 0.40    # Saturated water content [-]
-  theta_r: 0.01   # Residual water content [-]
-  alpha: 0.4       # 1/m (van Genuchten α)
-  n: 1.7           # van Genuchten n (>1)
-  Ks: 1.0e-5       # m/s (saturated conductivity)
-  l: 0.50          # Mualem pore-connectivity parameter
+  theta_s: 0.38    # Saturated water content [-] (sandy loam)
+  theta_r: 0.045   # Residual water content [-] (sandy loam)
+  alpha: 3.5       # van Genuchten α [1/m] (sandy loam)
+  n: 1.56          # van Genuchten n (>1) [-] (sandy loam)
+  Ks: 7.0e-6       # Saturated hydraulic conductivity [m/s] (moderately high)
+  l: 0.5           # Mualem pore-connectivity parameter [-]
 
 # ============================================================================
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 50000
+  n_epochs: 5000
   learning_rate: 1.0e-4
-  device: 'auto'      # 'auto', 'cuda', or 'cpu'
-  seed: 44
+  device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
+  seed: 42
 
 # ============================================================================
 # NETWORK ARCHITECTURE
@@ -71,11 +74,11 @@ network:
 # CACHE POOL & BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 0           # Total candidate points in pool
-  batch_size: 500            # Points sampled per iteration
-  resample_freq: 10000          # Update residuals every N epochs
-  boundary_ratio: 0         # Fraction of cache near boundaries (0-1)
-  high_residual_ratio: 0    # Fraction of batch from high-residual regions (0-1)
+  cache_size: 10000           # Total candidate points in pool
+  batch_size: 500             # Points sampled per iteration
+  resample_freq: 10000        # Update residuals every N epochs
+  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
   temperature: 0.3            # Softmax temperature (lower = more aggressive)
 
 # ============================================================================
@@ -106,22 +109,50 @@ optimization:
 # ============================================================================
 checkpointing:
   dir: 'checkpoints_train'
-  freq: 10000                  # Save checkpoint every N epochs (null = no checkpointing)
+  freq: 1000                  # Save checkpoint every N epochs
   keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
 
 # ============================================================================
 # PHYSICS PARAMETERS
 # ============================================================================
 physics:
-  Sy: 0.3                     # Specific yield
-  zr: 0.5                     # Root zone depth [m]
-  L: 4.0                      # Characteristic length [m]
-  S_max: 1.0e-7               # Maximum sink term [1/s]
-  zb_initial: 10             # Initial water table depth [m]
-  ic_type: 'obs'      # Initial condition type: 'obs', 'linear', 'hydrostatic'
+  Sy: 0.15                    # Specific yield [-] (sandy loam)
+  zr: 0.4                     # Root zone depth [m] (oak savanna)
+  L: 3.0                      # Characteristic length [m]
+  S_max: 1.5e-7               # Maximum sink term [1/s]
+  zb_initial: 2.0             # Initial water table depth [m] (moderate depth)
+  ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
 
 # ============================================================================
 # OUTPUT CONFIGURATION
 # ============================================================================
 output:
   dir: 'outputs'
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# Site Information:
+#   - Location: Oak Openings, Ohio (41.5545°N, 83.8438°W)
+#   - Elevation: 219 m
+#   - Climate: Humid continental
+#   - Vegetation: Oak savanna (Quercus spp.)
+#   - Soil: Sandy loam (Toledo series)
+#
+# Data Notes:
+#   - AmeriFlux BASE product
+#   - SWC data: 100% coverage in 2012 (excellent!)
+#   - WTD data: 77.8% coverage in 2012
+#   - Missing values coded as -9999
+#   - Low soil moisture (17-21%) typical for sandy soils
+#   - WTD is negative (below datum reference)
+#   - Moderate water table depth (~1.9 m average)
+#
+# Recommended Actions:
+#   1. Verify actual SWC sensor depth from site documentation
+#   2. Update soil parameters if site measurements available
+#   3. Consider oak savanna specific ET patterns
+#   4. Account for sandy soil drainage characteristics
+#
+# References:
+#   - AmeriFlux site info: https://ameriflux.lbl.gov/sites/siteinfo/US-Oho

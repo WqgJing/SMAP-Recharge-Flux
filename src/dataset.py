@@ -233,15 +233,25 @@ class PINNDataset:
                 print("=" * 70)
 
             try:
-                # Read Excel file with date filtering
-                df = pd.read_excel(config.data_path)
+                # Read file (CSV or Excel) with date filtering
+                file_ext = config.data_path.lower().split('.')[-1]
+
+                if file_ext == 'csv':
+                    # CSV file (e.g., AmeriFlux data)
+                    df = pd.read_csv(config.data_path, comment='#')
+                else:
+                    # Excel file
+                    df = pd.read_excel(config.data_path)
 
                 # Get datetime column
                 datetime_col_name = column_mapping.get('datetime')
                 if column_mapping.get('multi_level_header', False):
                     if isinstance(datetime_col_name, list):
                         # Multi-level header - reload with proper header
-                        df = pd.read_excel(config.data_path, header=[0, 1])
+                        if file_ext == 'csv':
+                            df = pd.read_csv(config.data_path, comment='#', header=[0, 1])
+                        else:
+                            df = pd.read_excel(config.data_path, header=[0, 1])
                         dt_col = df[tuple(datetime_col_name)]
                     else:
                         dt_col = df[datetime_col_name]
@@ -249,7 +259,14 @@ class PINNDataset:
                     dt_col = df[datetime_col_name]
 
                 # Convert to datetime
-                dt_col = pd.to_datetime(dt_col)
+                # Handle AmeriFlux timestamp format for CSV files
+                if file_ext == 'csv':
+                    try:
+                        dt_col = pd.to_datetime(dt_col, format='%Y%m%d%H%M')
+                    except (ValueError, TypeError):
+                        dt_col = pd.to_datetime(dt_col)
+                else:
+                    dt_col = pd.to_datetime(dt_col)
 
                 # Apply date range filter (same as main data)
                 if config.start_date is not None:
@@ -275,6 +292,10 @@ class PINNDataset:
 
                 # Convert to numeric
                 wtd_raw = pd.to_numeric(wtd_raw, errors='coerce')
+
+                # Replace missing value codes with NaN
+                from src.data_loader import replace_missing_codes
+                wtd_raw = replace_missing_codes(wtd_raw)
 
                 # Apply sign conversion if specified
                 wtd_sign = column_mapping.get('wtd_sign', 1.0)

@@ -1,60 +1,64 @@
 # ============================================================================
-# BASELINE CONFIGURATION - Forward PINN Training
+# US-StJ (St. Jones Reserve) 2017 CONFIGURATION - Forward PINN Training
 # ============================================================================
-# This config file centralizes ALL hyperparameters for PINN training.
-# Copy and modify this file for different experiments.
+# Site: US-StJ (St. Jones Reserve, Delaware)
+# Location: Tidal marsh ecosystem
+# Data source: AmeriFlux BASE product (HH = half-hourly)
+# Version: 2-5
 
 # ============================================================================
 # DATA CONFIGURATION
 # ============================================================================
 data:
-  path: 'data/2017_HalfHourly_UTC_ForestSite1.xlsx'
-  start_date: '2017-05-19'
-  end_date: '2017-05-26'
+  path: 'data/AMF_US-StJ_BASE_HH_2-5.csv'
+  start_date: '2014-01-01'   # Start of 2017
+  end_date: '2017-06-30'     # End of 2017 (1 year)
   interpolate: true
   max_gap_hours: 6
 
-  # Column mapping - specifies which columns to use for each depth
-  # This allows the same code to work with different data formats
+  # Column mapping - US-StJ AmeriFlux format
   column_mapping:
-    # Datetime column name (use tuple for multi-level headers)
-    datetime: ['Unnamed: 0_level_0', 'Date Time']
+    # Datetime column (AmeriFlux format: YYYYMMDDHHMM)
+    datetime: 'TIMESTAMP_START'
 
-    # Multi-level header indicator
-    multi_level_header: true
+    # Single-level header
+    multi_level_header: false
 
-    # Unit conversion factor (1.0 for m³/m³, 0.01 for percentage to fraction)
-    unit_conversion: 1.0
+    # Unit conversion: Data is in percentage (0-100), convert to fraction
+    unit_conversion: 0.01
 
-    # Depth column mappings (depth_name: column_name)
-    # Use tuple for multi-level headers, string for single-level
+    # Depth column mappings
+    # US-StJ has 2 SWC sensors
+    # Note: Actual sensor depths unknown, using estimated depths
     depths:
-      2cm: ['CR1000_2589', '2cm theta']
-      15cm: ['CR1000_2589', '15cm theta']
-      30cm: ['CR1000_2588', '30cm_theta']
-      40cm: ['CR1000_2589', '40cm theta']
-      60cm: ['CR1000_2588', '60cm_theta']
-      80cm: ['CR1000_2588', '80cm_theta']
+      10cm: 'SWC_1_3_1'    # Surface BC - shallower sensor (estimated)
+      20cm: 'SWC_1_2_1'    # Deeper sensor (estimated)
+
+    # Water table depth
+    wtd: 'WTD'
+    wtd_sign: -1.0  # Data is negative/positive mixed, convert to positive downward
 
 # ============================================================================
 # SOIL PARAMETERS (van Genuchten-Mualem)
 # ============================================================================
+# US-StJ is a tidal marsh with organic-rich soils
+# Reference: https://ameriflux.lbl.gov/sites/siteinfo/US-StJ
 soil:
-  theta_s: 0.40    # Saturated water content [-]
-  theta_r: 0.01   # Residual water content [-]
-  alpha: 0.4       # 1/m (van Genuchten α)
-  n: 1.7           # van Genuchten n (>1)
-  Ks: 1.0e-5       # m/s (saturated conductivity)
-  l: 0.50          # Mualem pore-connectivity parameter
+  theta_s: 0.50    # Saturated water content [-] (marsh organic soil)
+  theta_r: 0.10    # Residual water content [-]
+  alpha: 2.0       # van Genuchten α [1/m]
+  n: 1.4           # van Genuchten n (>1) [-]
+  Ks: 1.0e-5       # Saturated hydraulic conductivity [m/s]
+  l: 0.5           # Mualem pore-connectivity parameter [-]
 
 # ============================================================================
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 50000
+  n_epochs: 5000
   learning_rate: 1.0e-4
-  device: 'auto'      # 'auto', 'cuda', or 'cpu'
-  seed: 44
+  device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
+  seed: 42
 
 # ============================================================================
 # NETWORK ARCHITECTURE
@@ -71,11 +75,11 @@ network:
 # CACHE POOL & BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 0           # Total candidate points in pool
-  batch_size: 500            # Points sampled per iteration
-  resample_freq: 10000          # Update residuals every N epochs
-  boundary_ratio: 0         # Fraction of cache near boundaries (0-1)
-  high_residual_ratio: 0    # Fraction of batch from high-residual regions (0-1)
+  cache_size: 10000           # Total candidate points in pool
+  batch_size: 500             # Points sampled per iteration
+  resample_freq: 10000        # Update residuals every N epochs
+  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
   temperature: 0.3            # Softmax temperature (lower = more aggressive)
 
 # ============================================================================
@@ -106,22 +110,48 @@ optimization:
 # ============================================================================
 checkpointing:
   dir: 'checkpoints_train'
-  freq: 10000                  # Save checkpoint every N epochs (null = no checkpointing)
+  freq: 1000                  # Save checkpoint every N epochs
   keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
 
 # ============================================================================
 # PHYSICS PARAMETERS
 # ============================================================================
 physics:
-  Sy: 0.3                     # Specific yield
-  zr: 0.5                     # Root zone depth [m]
-  L: 4.0                      # Characteristic length [m]
-  S_max: 1.0e-7               # Maximum sink term [1/s]
-  zb_initial: 10             # Initial water table depth [m]
-  ic_type: 'obs'      # Initial condition type: 'obs', 'linear', 'hydrostatic'
+  Sy: 0.15                    # Specific yield [-] (marsh soil)
+  zr: 0.3                     # Root zone depth [m] (marsh grasses)
+  L: 3.0                      # Characteristic length [m]
+  S_max: 1.5e-7               # Maximum sink term [1/s]
+  zb_initial: 0.5             # Initial water table depth [m] (shallow in tidal marsh)
+  ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
 
 # ============================================================================
 # OUTPUT CONFIGURATION
 # ============================================================================
 output:
   dir: 'outputs'
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# Site Information:
+#   - Location: St. Jones Reserve, Delaware (39.0881°N, 75.4374°W)
+#   - Elevation: 1 m
+#   - Climate: Humid subtropical
+#   - Vegetation: Tidal marsh (Spartina alterniflora - cordgrass)
+#   - Soil: Organic-rich marsh soils
+#
+# Data Notes:
+#   - AmeriFlux BASE product
+#   - SWC data: 94.4% coverage in 2017 (best year)
+#   - WTD data: 69.2% coverage in 2017
+#   - Missing values coded as -9999
+#   - WTD can be negative (above datum) or positive (below datum) due to tides
+#
+# Recommended Actions:
+#   1. Verify actual sensor depths from site documentation
+#   2. Consider tidal influences on WTD fluctuations
+#   3. Update soil parameters if site measurements available
+#   4. Check if marsh-specific hydraulic models are needed
+#
+# References:
+#   - AmeriFlux site info: https://ameriflux.lbl.gov/sites/siteinfo/US-StJ

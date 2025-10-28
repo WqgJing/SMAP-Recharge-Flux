@@ -1,0 +1,160 @@
+# ============================================================================
+# US-Ton (Tonzi Ranch) 2023 CONFIGURATION - Forward PINN Training
+# ============================================================================
+# Site: US-Ton (Tonzi Ranch, California)
+# Location: Oak savanna ecosystem
+# Data source: AmeriFlux BASE product (HH = half-hourly)
+# Version: 24-5
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+data:
+  path: 'data/AMF_US-Ton_BASE_HH_24-5.csv'
+  start_date: '2021-01-01'   # Start of 2023
+  end_date: '2024-12-31'     # End of 2023 (1 year)
+  interpolate: true
+  max_gap_hours: 6
+
+  # Column mapping - US-Ton AmeriFlux format
+  column_mapping:
+    # Datetime column (AmeriFlux format: YYYYMMDDHHMM)
+    datetime: 'TIMESTAMP_START'
+
+    # Single-level header
+    multi_level_header: false
+
+    # Unit conversion: Data is in percentage (0-100), convert to fraction
+    unit_conversion: 0.01
+
+    # Depth column mappings
+    # US-Ton has 7 SWC sensors at different depths
+    # Note: Need to determine actual depths from site metadata
+    # Using generic depth labels based on typical sensor placement
+    depths:
+      5cm: 'SWC_2_2_1'     # Surface BC - shallowest sensor
+
+
+
+    # Water table depth (optional - WTD is available!)
+    wtd: 'WTD_2_1_1'
+    wtd_sign: -1.0  # Data is negative (below datum), convert to positive downward
+
+# ============================================================================
+# SOIL PARAMETERS (van Genuchten-Mualem)
+# ============================================================================
+# ⚠️ PLACEHOLDER VALUES - UPDATE FOR US-TON SITE!
+# US-Ton is an oak savanna with Auburn soil series
+# Reference: https://doi.org/10.1029/2009WR008351 (Ma et al., 2007)
+soil:
+  theta_s: 0.43    # Saturated water content [-] (Auburn gravelly loam)
+  theta_r: 0.075   # Residual water content [-]
+  alpha: 3.5       # van Genuchten α [1/m]
+  n: 1.56          # van Genuchten n (>1) [-]
+  Ks: 5.0e-6       # Saturated hydraulic conductivity [m/s] (moderate drainage)
+  l: 0.5           # Mualem pore-connectivity parameter [-]
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training:
+  n_epochs: 5000
+  learning_rate: 1.0e-4
+  device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
+  seed: 42
+
+# ============================================================================
+# NETWORK ARCHITECTURE
+# ============================================================================
+network:
+  h_net:              # Pressure head network
+    hidden_dim: 64
+    num_layers: 4
+  zb_net:             # Water table network
+    hidden_dim: 32
+    num_layers: 3
+
+# ============================================================================
+# CACHE POOL & BATCH SAMPLING (PDE Collocation)
+# ============================================================================
+sampling:
+  cache_size: 10000           # Total candidate points in pool
+  batch_size: 500             # Points sampled per iteration
+  resample_freq: 10000        # Update residuals every N epochs
+  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
+  temperature: 0.3            # Softmax temperature (lower = more aggressive)
+
+# ============================================================================
+# BOUNDARY CONDITION SAMPLING (Gradient-Based)
+# ============================================================================
+boundary_sampling:
+  batch_size_bc: 450          # Dedicated BC points per iteration
+  interp_ratio: 0.30          # Fraction from gradient-interpolated points
+  neighbor_ratio: 0.00        # Fraction from neighbors of high-gradient regions
+  baseline_ratio: 0.70        # Fraction from uniform baseline
+  neighbor_expansion: 0       # How many neighbors around high-gradient intervals
+  gradient_threshold: 0.7     # Percentile for "high gradient" (0.7 = top 30%)
+  power: 2.0                  # Gradient emphasis (>1 = more aggressive)
+
+# ============================================================================
+# OPTIMIZATION & WEIGHT MANAGEMENT
+# ============================================================================
+optimization:
+  weight_update_freq: 10000000000  # Update weights every N epochs (1e10 = fixed)
+  weight_lr: 0.1                   # Learning rate for weight updates
+  use_initial_scales: true         # Use initial scale-based weights
+  use_amp: false                   # Mixed precision training (faster, less memory)
+  use_multi_gpu: true              # Use DataParallel if multiple GPUs available
+  grad_accumulation_steps: 1       # Gradient accumulation for larger effective batch
+
+# ============================================================================
+# CHECKPOINTING
+# ============================================================================
+checkpointing:
+  dir: 'checkpoints_train'
+  freq: 1000                  # Save checkpoint every N epochs
+  keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
+
+# ============================================================================
+# PHYSICS PARAMETERS
+# ============================================================================
+physics:
+  Sy: 0.2                     # Specific yield [-] (gravelly soil)
+  zr: 0.4                     # Root zone depth [m] (oak savanna)
+  L: 3.0                      # Characteristic length [m]
+  S_max: 1.5e-7               # Maximum sink term [1/s]
+  zb_initial: 5.0             # Initial water table depth [m] (shallow at US-Ton)
+  ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output:
+  dir: 'outputs'
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# Site Information:
+#   - Location: Tonzi Ranch, California (38.4316°N, 120.9660°W)
+#   - Elevation: 177 m
+#   - Climate: Mediterranean (hot, dry summers; cool, wet winters)
+#   - Vegetation: Oak savanna (Quercus douglasii - blue oak)
+#   - Soil: Auburn series (gravelly loam, shallow depth to bedrock)
+#
+# Data Notes:
+#   - AmeriFlux BASE product includes gap-filled (PI_F) and raw versions
+#   - SWC data: ~17% coverage (sensors may have periods offline)
+#   - WTD data: ~61% coverage (WTD_1_1_1 is more complete)
+#   - Missing values coded as -9999
+#
+# Recommended Actions:
+#   1. Verify actual sensor depths from site documentation
+#   2. Update soil parameters from Auburn soil series or site measurements
+#   3. Consider using gap-filled versions (SWC_PI_F_*) for better coverage
+#   4. Check data quality for selected date range before training
+#
+# References:
+#   - Ma et al. (2007): https://doi.org/10.1029/2007WR006427
+#   - AmeriFlux site info: https://ameriflux.lbl.gov/sites/siteinfo/US-Ton

@@ -1,0 +1,156 @@
+# ============================================================================
+# US-NC4 (NC Clearcut #4) 2019 CONFIGURATION - Forward PINN Training
+# ============================================================================
+# Site: US-NC4 (North Carolina Clearcut #4)
+# Location: Clearcut/regenerating forest wetland
+# Data source: AmeriFlux BASE product (HH = half-hourly)
+# Version: 9-5
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+data:
+  path: 'data/AMF_US-NC4_BASE_HH_9-5.csv'
+  start_date: '2019-01-01'   # Start of 2019
+  end_date: '2019-12-31'     # End of 2019 (1 year)
+  interpolate: true
+  max_gap_hours: 6
+
+  # Column mapping - US-NC4 AmeriFlux format
+  column_mapping:
+    # Datetime column (AmeriFlux format: YYYYMMDDHHMM)
+    datetime: 'TIMESTAMP_START'
+
+    # Single-level header
+    multi_level_header: false
+
+    # Unit conversion: Data is in percentage (0-100), convert to fraction
+    unit_conversion: 0.01
+
+    # Depth column mappings
+    # US-NC4 has multiple SWC sensors, using SWC_1_1_1 (best coverage in 2019)
+    depths:
+      10cm: 'SWC_1_1_1'    # Surface BC - primary sensor (estimated depth)
+
+    # Water table depth
+    wtd: 'WTD_1_1_1'
+    wtd_sign: 1.0  # Data is already in correct sign (positive/negative near surface)
+
+# ============================================================================
+# SOIL PARAMETERS (van Genuchten-Mualem)
+# ============================================================================
+# US-NC4 is a regenerating clearcut wetland with organic-rich soils
+# North Carolina coastal plain
+soil:
+  theta_s: 0.55    # Saturated water content [-] (wetland organic soil)
+  theta_r: 0.10    # Residual water content [-] (organic soil)
+  alpha: 1.5       # van Genuchten α [1/m] (organic soil)
+  n: 1.35          # van Genuchten n (>1) [-] (organic soil)
+  Ks: 5.0e-6       # Saturated hydraulic conductivity [m/s] (moderate)
+  l: 0.5           # Mualem pore-connectivity parameter [-]
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training:
+  n_epochs: 5000
+  learning_rate: 1.0e-4
+  device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
+  seed: 42
+
+# ============================================================================
+# NETWORK ARCHITECTURE
+# ============================================================================
+network:
+  h_net:              # Pressure head network
+    hidden_dim: 64
+    num_layers: 4
+  zb_net:             # Water table network
+    hidden_dim: 32
+    num_layers: 3
+
+# ============================================================================
+# CACHE POOL & BATCH SAMPLING (PDE Collocation)
+# ============================================================================
+sampling:
+  cache_size: 10000           # Total candidate points in pool
+  batch_size: 500             # Points sampled per iteration
+  resample_freq: 10000        # Update residuals every N epochs
+  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
+  temperature: 0.3            # Softmax temperature (lower = more aggressive)
+
+# ============================================================================
+# BOUNDARY CONDITION SAMPLING (Gradient-Based)
+# ============================================================================
+boundary_sampling:
+  batch_size_bc: 450          # Dedicated BC points per iteration
+  interp_ratio: 0.30          # Fraction from gradient-interpolated points
+  neighbor_ratio: 0.00        # Fraction from neighbors of high-gradient regions
+  baseline_ratio: 0.70        # Fraction from uniform baseline
+  neighbor_expansion: 0       # How many neighbors around high-gradient intervals
+  gradient_threshold: 0.7     # Percentile for "high gradient" (0.7 = top 30%)
+  power: 2.0                  # Gradient emphasis (>1 = more aggressive)
+
+# ============================================================================
+# OPTIMIZATION & WEIGHT MANAGEMENT
+# ============================================================================
+optimization:
+  weight_update_freq: 10000000000  # Update weights every N epochs (1e10 = fixed)
+  weight_lr: 0.1                   # Learning rate for weight updates
+  use_initial_scales: true         # Use initial scale-based weights
+  use_amp: false                   # Mixed precision training (faster, less memory)
+  use_multi_gpu: true              # Use DataParallel if multiple GPUs available
+  grad_accumulation_steps: 1       # Gradient accumulation for larger effective batch
+
+# ============================================================================
+# CHECKPOINTING
+# ============================================================================
+checkpointing:
+  dir: 'checkpoints_train'
+  freq: 1000                  # Save checkpoint every N epochs
+  keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
+
+# ============================================================================
+# PHYSICS PARAMETERS
+# ============================================================================
+physics:
+  Sy: 0.20                    # Specific yield [-] (wetland soil)
+  zr: 0.3                     # Root zone depth [m] (regenerating vegetation)
+  L: 3.0                      # Characteristic length [m]
+  S_max: 1.5e-7               # Maximum sink term [1/s]
+  zb_initial: 0.1             # Initial water table depth [m] (very shallow - wetland)
+  ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output:
+  dir: 'outputs'
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# Site Information:
+#   - Location: North Carolina (35.9783°N, 76.6421°W)
+#   - Elevation: 6 m
+#   - Climate: Humid subtropical
+#   - Vegetation: Regenerating clearcut (formerly loblolly pine plantation)
+#   - Soil: Organic-rich wetland soils
+#
+# Data Notes:
+#   - AmeriFlux BASE product
+#   - SWC data: 92.7% coverage in 2019
+#   - WTD data: 100% coverage in 2019 (excellent!)
+#   - Missing values coded as -9999
+#   - Very high soil moisture (76-89%) - saturated wetland conditions
+#   - WTD very shallow (-0.05 to 0.17 m) - water table at/near surface
+#
+# Recommended Actions:
+#   1. Verify actual SWC sensor depth from site documentation
+#   2. Consider wetland-specific processes (ponding, saturation excess)
+#   3. Update soil parameters if site measurements available
+#   4. Account for very shallow water table dynamics
+#
+# References:
+#   - AmeriFlux site info: https://ameriflux.lbl.gov/sites/siteinfo/US-NC4
