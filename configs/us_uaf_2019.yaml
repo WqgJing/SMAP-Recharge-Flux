@@ -10,14 +10,13 @@
 # ============================================================================
 data:
   path: 'data/US-Uaf_2019_May-Sep_LE_SWC_WTD.xlsx'
-  start_date: '2019-05-01'
-  end_date: '2019-05-31'  # Adjust as needed
+  start_date: '2019-07-30'  # July 30, 2019
+  end_date: '2019-08-13'    # August 13, 2019 (15 days)
   interpolate: true
   max_gap_hours: 6
 
   # Column mapping - US-Uaf specific columns
-  # NOTE: You'll need to determine what depths SWC_1_1_1, SWC_1_2_1, etc. represent
-  # Based on the data, these appear to be different sensors/depths
+  # SWC_1_2_1 is used as the SURFACE boundary condition
   column_mapping:
     # Datetime column name (single-level header)
     datetime: 'datetime'
@@ -29,25 +28,15 @@ data:
     unit_conversion: 0.01
 
     # Depth column mappings (depth_name: column_name)
-    # TODO: Verify what depths these SWC sensors represent!
-    # Currently using gap-filled versions (SWC_PI_F_*) for better data quality
-    # You may need to adjust these mappings based on actual sensor depths
+    # Using RAW data (not gap-filled) as specified
+    # SWC_1_2_1 is the SURFACE BC (first depth in the list = surface)
     depths:
-      # Option 1: Use gap-filled data (recommended for fewer NaNs)
-      2cm: 'SWC_PI_F_1_1_1'    # TODO: Verify actual depth
-      15cm: 'SWC_PI_F_1_2_1'   # TODO: Verify actual depth
-      30cm: 'SWC_PI_F_2_1_1'   # TODO: Verify actual depth
-      40cm: 'SWC_PI_F_2_2_1'   # TODO: Verify actual depth
-      60cm: 'SWC_PI_F_2_3_1'   # TODO: Verify actual depth
-      # Note: US-Uaf data only has 5 SWC sensors, not 6 like Calhoun
-      # If you need 6 depths, you'll need to interpolate or use a different approach
-
-      # Option 2: Use raw data (more NaNs, but original measurements)
-      # 2cm: 'SWC_1_1_1'
-      # 15cm: 'SWC_1_2_1'
-      # 30cm: 'SWC_2_1_1'
-      # 40cm: 'SWC_2_2_1'
-      # 60cm: 'SWC_2_3_1'
+      2cm: 'SWC_1_2_1'   # Surface BC - this will be used for theta(z=0,t)
+      15cm: 'SWC_1_1_1'  # Depth sensor 1
+      30cm: 'SWC_2_1_1'  # Depth sensor 2
+      40cm: 'SWC_2_2_1'  # Depth sensor 3
+      60cm: 'SWC_2_3_1'  # Depth sensor 4
+      # Note: US-Uaf data has 5 SWC sensors total
 
 # ============================================================================
 # SOIL PARAMETERS (van Genuchten-Mualem)
