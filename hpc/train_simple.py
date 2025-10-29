@@ -104,7 +104,9 @@ os.makedirs(output_dir, exist_ok=True)
 
 # 🎨 Plot results - automatically handles all depths, WTD, etc!
 print("Creating comprehensive results plot...")
-plot_results(model, dataset, device=args.device)
+# Get actual device from model (args.device might be 'auto')
+actual_device = next(model.parameters()).device
+plot_results(model, dataset, device=actual_device)
 plt.savefig(f'{output_dir}/results.png', dpi=150, bbox_inches='tight')
 plt.close()
 print(f"✓ Saved: {output_dir}/results.png")
