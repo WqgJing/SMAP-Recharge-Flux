@@ -1,0 +1,75 @@
+======================================================================
+SIMPLE PINN TRAINING SUMMARY
+======================================================================
+
+Configuration:
+  Config file: configs/us_crt_2013.yaml
+  Data: data/AMF_US-CRT_BASE_HH_5-5.csv
+  Date range: 2013-04-1 to 2013-5-01
+  Observation depths: 1 → ['10cm']
+  WTD available: True
+
+Soil Parameters (van Genuchten-Mualem):
+  theta_s: 0.7
+  theta_r: 0.067
+  alpha: 2.0
+  n: 1.41
+  Ks: 4e-06
+  l: 0.5
+
+Physics Parameters:
+  Sy (specific yield): 0.18
+  zr (root zone depth): 0.5 m
+  L (characteristic length): 3.0 m
+  S_max (max sink): 1.5e-07 1/s
+  zb_initial (initial water table): 0.75 m
+  ic_type: obs
+
+Network Architecture:
+  h_net (pressure head):
+    hidden_dim: 64
+    num_layers: 4
+  zb_net (water table):
+    hidden_dim: 32
+    num_layers: 3
+
+Sampling Configuration:
+  PDE collocation:
+    cache_size: 0
+    batch_size: 3000
+    resample_freq: 100000000
+    boundary_ratio: 0.0
+    high_residual_ratio: 0.0
+    temperature: 0.3
+  Boundary condition:
+    batch_size_bc: 450
+    interp_ratio: 0.3
+    neighbor_ratio: 0.0
+    baseline_ratio: 0.7
+    gradient_neighbor_expansion: 0
+    gradient_threshold: 0.7
+    gradient_power: 2.0
+
+Training:
+  Epochs: 501000
+  Learning rate: 0.0001
+  Device: auto
+  Resumed from: checkpoints_train/checkpoint_final_copy.pt
+  Weight update freq: 10000000000.0
+  Weight lr: 0.1
+  Use initial scales: True
+  Total time: 0.02 hours
+  Time per epoch: 0.2 ms
+
+Results:
+  Final total loss: 2.655e-02
+  Final PDE loss: 6.232e-03
+  Final surface BC loss: 1.685e-02
+  Final WT head loss: 3.989e-04
+  Final IC loss: 7.139e-04
+
+Outputs:
+  Directory: output_20251029_200526/
+  Checkpoints: output_20251029_200526/checkpoints/
+  Final checkpoint: output_20251029_200526/checkpoints/checkpoint_final.pt
+======================================================================

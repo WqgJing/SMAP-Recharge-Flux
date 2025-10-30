@@ -11,8 +11,8 @@
 # ============================================================================
 data:
   path: 'data/AMF_US-ONA_BASE_HH_4-5.csv'
-  start_date: '2022-01-01'   # Start of 2022
-  end_date: '2022-12-31'     # End of 2022 (1 year)
+  start_date: '2021-06-21'   # Start of 2022
+  end_date: '2021-07-9'     # 2021-09-01
   interpolate: true
   max_gap_hours: 6
 
@@ -43,10 +43,10 @@ data:
 # US-ONA is a minerotrophic peatland (fen) with organic soils
 # Reference: https://ameriflux.lbl.gov/sites/siteinfo/US-ONA
 soil:
-  theta_s: 0.60    # Saturated water content [-] (peat)
-  theta_r: 0.12    # Residual water content [-] (peat)
+  theta_s: 0.7    # Saturated water content [-] (peat)
+  theta_r: 0.01    # Residual water content [-] (peat)
   alpha: 1.0       # van Genuchten α [1/m] (peat)
-  n: 1.30          # van Genuchten n (>1) [-] (peat)
+  n: 1.80          # van Genuchten n (>1) [-] (peat)
   Ks: 3.0e-6       # Saturated hydraulic conductivity [m/s] (peat)
   l: 0.5           # Mualem pore-connectivity parameter [-]
 
@@ -54,7 +54,7 @@ soil:
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 5000
+  n_epochs: 10000
   learning_rate: 1.0e-4
   device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
   seed: 42
@@ -74,11 +74,11 @@ network:
 # CACHE POOL & BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 10000           # Total candidate points in pool
-  batch_size: 500             # Points sampled per iteration
-  resample_freq: 10000        # Update residuals every N epochs
-  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
-  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
+  cache_size: 0           # Total candidate points in pool
+  batch_size: 2000             # Points sampled per iteration
+  resample_freq: 1000000        # Update residuals every N epochs
+  boundary_ratio: 0         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0    # Fraction from high-residual regions (0-1)
   temperature: 0.3            # Softmax temperature (lower = more aggressive)
 
 # ============================================================================
@@ -109,7 +109,7 @@ optimization:
 # ============================================================================
 checkpointing:
   dir: 'checkpoints_train'
-  freq: 1000                  # Save checkpoint every N epochs
+  freq: 50000                  # Save checkpoint every N epochs
   keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
 
 # ============================================================================
