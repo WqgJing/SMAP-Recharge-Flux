@@ -54,7 +54,7 @@ soil:
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 501000
+  n_epochs: 1501000
   learning_rate: 1.0e-4
   device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
   seed: 42
@@ -109,7 +109,7 @@ optimization:
 # ============================================================================
 checkpointing:
   dir: 'checkpoints_train'
-  freq: 1000                  # Save checkpoint every N epochs
+  freq: 50000                  # Save checkpoint every N epochs
   keep_last_n: 3              # Keep only last N checkpoints (null = keep all)
 
 # ============================================================================

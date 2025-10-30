@@ -190,9 +190,9 @@ def train_pinn_pool_batch_autoweight(
 
             # Load random states for reproducibility
             if 'rng_state' in checkpoint:
-                torch.set_rng_state(checkpoint['rng_state'])
+                torch.set_rng_state(checkpoint['rng_state'].cpu())
             if 'cuda_rng_state' in checkpoint and torch.cuda.is_available():
-                torch.cuda.set_rng_state(checkpoint['cuda_rng_state'])
+                torch.cuda.set_rng_state(checkpoint['cuda_rng_state'].cpu())
 
             print(f"Resumed from epoch {start_epoch}")
         else:
