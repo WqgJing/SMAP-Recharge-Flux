@@ -11,8 +11,8 @@
 # ============================================================================
 data:
   path: 'data/AMF_US-CRT_BASE_HH_5-5.csv'
-  start_date: '2013-09-01'   # Start of 2013
-  end_date: '2013-11-1'     # End of 2013 (1 year)
+  start_date: '2013-04-1'   # Start of 2013
+  end_date: '2013-5-01'     # End of 2013 (1 year)
   interpolate: true
   max_gap_hours: 6
 
@@ -43,7 +43,7 @@ data:
 # US-CRT is agricultural cropland with silt loam soils (Hoytville series)
 # Reference: https://ameriflux.lbl.gov/sites/siteinfo/US-CRT
 soil:
-  theta_s: 0.45    # Saturated water content [-] (silt loam)
+  theta_s: 0.7    # Saturated water content [-] (silt loam)
   theta_r: 0.067   # Residual water content [-] (silt loam)
   alpha: 2.0       # van Genuchten α [1/m] (silt loam)
   n: 1.41          # van Genuchten n (>1) [-] (silt loam)
@@ -54,7 +54,7 @@ soil:
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 5000
+  n_epochs: 501000
   learning_rate: 1.0e-4
   device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
   seed: 42
@@ -74,11 +74,11 @@ network:
 # CACHE POOL & BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 10000           # Total candidate points in pool
-  batch_size: 500             # Points sampled per iteration
-  resample_freq: 10000        # Update residuals every N epochs
-  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
-  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
+  cache_size: 0           # Total candidate points in pool
+  batch_size: 3000             # Points sampled per iteration
+  resample_freq: 100000000        # Update residuals every N epochs
+  boundary_ratio: 0.0         # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0.0    # Fraction from high-residual regions (0-1)
   temperature: 0.3            # Softmax temperature (lower = more aggressive)
 
 # ============================================================================
@@ -120,7 +120,7 @@ physics:
   zr: 0.5                     # Root zone depth [m] (corn/soybean)
   L: 3.0                      # Characteristic length [m]
   S_max: 1.5e-7               # Maximum sink term [1/s]
-  zb_initial: 1.5             # Initial water table depth [m] (moderate depth)
+  zb_initial: 0.75             # Initial water table depth [m] (moderate depth)
   ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
 
 # ============================================================================

@@ -163,19 +163,26 @@ def train_pinn_pool_batch_autoweight(
             # Load training state
             start_epoch = checkpoint['epoch'] + 1
 
-            # Load weight manager state
+            # Load weight manager state (with backward compatibility)
             if 'weight_manager_state' in checkpoint:
-                weight_manager.weights = checkpoint['weight_manager_state']['weights']
-                weight_manager.weight_history = checkpoint['weight_manager_state']['weight_history']
-                weight_manager.grad_ema = checkpoint['weight_manager_state']['grad_ema']
+                wm_state = checkpoint['weight_manager_state']
+                weight_manager.weights = wm_state.get('weights', weight_manager.weights)
+                # Initialize weight_history as dict if not in checkpoint
+                if 'weight_history' in wm_state:
+                    weight_manager.weight_history = wm_state['weight_history']
+                else:
+                    # Create fresh weight history dict from current weights
+                    weight_manager.weight_history = {k: [weight_manager.weights[k]] for k in weight_manager.weights}
+                weight_manager.grad_ema = wm_state.get('grad_ema', weight_manager.grad_ema)
 
-            # Load logger state
+            # Load logger state (with backward compatibility)
             if 'logger_state' in checkpoint:
-                logger.losses = checkpoint['logger_state']['losses']
-                logger.comps = checkpoint['logger_state']['comps']
-                logger.sample_losses = checkpoint['logger_state']['sample_losses']
-                logger.sample_comps = checkpoint['logger_state']['sample_comps']
-                logger.sample_epochs = checkpoint['logger_state']['sample_epochs']
+                log_state = checkpoint['logger_state']
+                logger.losses = log_state.get('losses', [])
+                logger.comps = log_state.get('comps', {})
+                logger.sample_losses = log_state.get('sample_losses', [])
+                logger.sample_comps = log_state.get('sample_comps', {})
+                logger.sample_epochs = log_state.get('sample_epochs', [])
 
             # Load AMP scaler state if using AMP
             if use_amp and scaler is not None and 'scaler_state_dict' in checkpoint:
@@ -213,6 +220,18 @@ def train_pinn_pool_batch_autoweight(
         f"z adaptive in [-z_b(t), 0]"
     )
     print(f"Initial weights: {weight_manager.get_weights()}")
+
+    # Check if training should run
+    if start_epoch >= n_epochs:
+        print(f"\n⚠️  WARNING: Checkpoint is from epoch {start_epoch}, but n_epochs={n_epochs}")
+        print(f"   No training will occur. Checkpoint is already beyond target epochs.")
+        print(f"   Either:")
+        print(f"     1. Increase n_epochs in your config to > {start_epoch}")
+        print(f"     2. Or just use the checkpoint as-is (already trained)")
+
+        # Initialize variables for final summary (training loop won't run)
+        gradients = {"total": 0.0}
+        weights = weight_manager.get_weights()
 
     # --- Main training loop (GPU-optimized) ---
     for epoch in range(start_epoch, n_epochs):
@@ -961,7 +980,7 @@ def finetune_pinn(
 # NEW UNIFIED API - Dataset-Based Training Functions
 # ============================================================================
 
-def train_pinn(dataset, device='auto', checkpoint_dir=None):
+def train_pinn(dataset, device='auto', checkpoint_dir=None, checkpoint_path=None):
     """
     Train PINN using unified PINNDataset - NEW SIMPLIFIED API.
 
@@ -972,6 +991,7 @@ def train_pinn(dataset, device='auto', checkpoint_dir=None):
         dataset: PINNDataset object (contains config, data, everything!)
         device: Device for training ('auto', 'cuda', 'cpu')
         checkpoint_dir: Override checkpoint directory (optional)
+        checkpoint_path: Path to checkpoint file to resume from (optional)
 
     Returns:
         model: Trained PINN model
@@ -982,9 +1002,16 @@ def train_pinn(dataset, device='auto', checkpoint_dir=None):
         sample_epochs: Sample epochs
 
     Example:
+        # Train from scratch
         dataset = PINNDataset('configs/baseline.yaml')
         model, losses, comps, *_ = train_pinn(dataset, device='cuda')
-        plot_results(model, dataset)
+
+        # Resume from checkpoint
+        model, losses, comps, *_ = train_pinn(
+            dataset,
+            device='cuda',
+            checkpoint_path='checkpoints/checkpoint_epoch_5000.pt'
+        )
     """
     import torch
 
@@ -1056,6 +1083,7 @@ def train_pinn(dataset, device='auto', checkpoint_dir=None):
         # Checkpointing
         checkpoint_dir=checkpoint_dir,
         checkpoint_freq=dataset.checkpoint_freq,
+        resume_from_checkpoint=checkpoint_path,  # Pass checkpoint path for resuming
         keep_last_n_checkpoints=dataset.keep_last_n_checkpoints,
 
         # Device
