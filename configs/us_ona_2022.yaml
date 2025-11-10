@@ -43,7 +43,7 @@ data:
 # US-ONA is a minerotrophic peatland (fen) with organic soils
 # Reference: https://ameriflux.lbl.gov/sites/siteinfo/US-ONA
 soil:
-  theta_s: 0.65    # Saturated water content [-] (peat)
+  theta_s: 0.42    # Saturated water content [-] (peat)
   theta_r: 0.01    # Residual water content [-] (peat)
   alpha: 0.7       # van Genuchten α [1/m] (peat)
   n: 1.90          # van Genuchten n (>1) [-] (peat)

@@ -21,6 +21,7 @@ import glob
 def train_pinn_pool_batch_autoweight(
     soil_params,
     theta0_data,
+    et_data=None,  # ← ET measurements (times, values) or None for constant S_max
     Sy=0.3,
     zr=0.5,
     h_net_config=None,
@@ -88,6 +89,7 @@ def train_pinn_pool_batch_autoweight(
     model = RichardsPINN(
         soil_params=soil_params,
         theta0_data=theta0_data,
+        et_data=et_data,  # ← ET data (None if not available, uses S_max)
         Sy=Sy,
         zr=zr,
         h_net_config=h_net_config,
@@ -503,6 +505,7 @@ def load_pretrained_model(checkpoint_path, device='cpu'):
 def finetune_pinn(
     checkpoint_path,
     new_theta0_data,
+    new_et_data=None,  # ← ET data for fine-tuning (None uses S_max)
     zb_initial=None,
     h_net_config=None,
     zb_net_config=None,
@@ -673,6 +676,7 @@ def finetune_pinn(
     model = RichardsPINN(
         soil_params=soil_params,
         theta0_data=new_theta0_data,  # NEW boundary conditions
+        et_data=new_et_data,  # NEW ET data (None if not available)
         Sy=Sy,
         zr=zr,
         h_net_config=h_net_config,
@@ -1037,6 +1041,7 @@ def train_pinn(dataset, device='auto', checkpoint_dir=None, checkpoint_path=None
         # Data
         soil_params=dataset.soil_params,
         theta0_data=dataset.get_bc_data(),
+        et_data=dataset.get_et_data(),  # ← ET data (None if not in config)
         ic_profile=dataset.ic_profile,
         ic_type=dataset.ic_type,
 
@@ -1134,6 +1139,7 @@ def finetune_pinn_with_dataset(base_checkpoint_path, new_dataset, device='auto',
     model, losses, comps, sample_losses, sample_comps, sample_epochs = finetune_pinn(
         checkpoint_path=base_checkpoint_path,
         new_theta0_data=new_dataset.get_bc_data(),
+        new_et_data=new_dataset.get_et_data(),  # ← ET data for fine-tuning
         zb_initial=new_dataset.zb_initial,
         h_net_config=new_dataset.h_net_config,
         zb_net_config=new_dataset.zb_net_config,

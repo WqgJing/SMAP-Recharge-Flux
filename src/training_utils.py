@@ -50,8 +50,15 @@ class SamplingHelpers:
         n_surface = n_boundary // 2
         n_bottom = n_boundary - n_surface
 
-        u_surface = torch.distributions.Beta(1.0, 3.0).sample((n_surface,)).to(device)
-        u_bottom = torch.distributions.Beta(3.0, 1.0).sample((n_bottom,)).to(device)
+        # Sample directly on GPU (avoid CPU→GPU transfer)
+        u_surface = torch.distributions.Beta(
+            torch.tensor(1.0, device=device),
+            torch.tensor(3.0, device=device)
+        ).sample((n_surface,))
+        u_bottom = torch.distributions.Beta(
+            torch.tensor(3.0, device=device),
+            torch.tensor(1.0, device=device)
+        ).sample((n_bottom,))
         u_interior = torch.rand(n_interior, device=device)
 
         u_col = torch.cat([u_surface, u_bottom, u_interior]).reshape(-1, 1)
@@ -357,15 +364,17 @@ class CachePoolManager:
         n_surface = n_boundary // 2
         n_bottom = n_boundary - n_surface
 
-        # Surface region: Beta(1,3) to concentrate near u=0
-        u_surface = (
-            torch.distributions.Beta(1.0, 3.0).sample((n_surface,)).to(self.device)
-        )
+        # Surface region: Beta(1,3) to concentrate near u=0 (sample directly on GPU)
+        u_surface = torch.distributions.Beta(
+            torch.tensor(1.0, device=self.device),
+            torch.tensor(3.0, device=self.device)
+        ).sample((n_surface,))
 
-        # Bottom region: Beta(3,1) to concentrate near u=1
-        u_bottom = (
-            torch.distributions.Beta(3.0, 1.0).sample((n_bottom,)).to(self.device)
-        )
+        # Bottom region: Beta(3,1) to concentrate near u=1 (sample directly on GPU)
+        u_bottom = torch.distributions.Beta(
+            torch.tensor(3.0, device=self.device),
+            torch.tensor(1.0, device=self.device)
+        ).sample((n_bottom,))
 
         # Interior points: uniform distribution
         u_interior = torch.rand(n_interior, device=self.device)
@@ -631,8 +640,15 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
             n_surface = n_boundary // 2
             n_bottom = n_boundary - n_surface
 
-            u_surface = torch.distributions.Beta(1.0, 3.0).sample((n_surface,)).to(device)
-            u_bottom = torch.distributions.Beta(3.0, 1.0).sample((n_bottom,)).to(device)
+            # Sample directly on GPU (avoid CPU→GPU transfer)
+            u_surface = torch.distributions.Beta(
+                torch.tensor(1.0, device=device),
+                torch.tensor(3.0, device=device)
+            ).sample((n_surface,))
+            u_bottom = torch.distributions.Beta(
+                torch.tensor(3.0, device=device),
+                torch.tensor(1.0, device=device)
+            ).sample((n_bottom,))
             u_interior = torch.rand(n_interior, device=device)
             u_chunk = torch.cat([u_surface, u_bottom, u_interior]).reshape(-1, 1)
 

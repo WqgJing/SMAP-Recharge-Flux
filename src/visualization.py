@@ -362,19 +362,19 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
 
 def plot_training_losses(losses_pool, comps_pool, sample_losses=None, sample_comps=None, sample_epochs=None):
     """
-    Plot training loss evolution with 6 subplots showing different loss components.
+    Plot training loss evolution with 8 subplots showing different loss components.
 
     Args:
         losses_pool: list or array of total weighted losses over epochs (batch losses)
         comps_pool: dictionary containing loss components with keys:
-                   'pde', 'surf', 'wt_head', 'ic_h'
+                   'pde', 'surf', 'wt_head', 'wt_kin', 'ic_h', 'ic_zb'
         sample_losses: optional list of total losses computed over full dataset
         sample_comps: optional dictionary of loss components computed over full dataset
         sample_epochs: optional list of epoch numbers where sample losses were computed
     """
 
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig, axes = plt.subplots(2, 4, figsize=(24, 10))
     title = 'Training - Sample Loss Evolution' if sample_losses else 'Pool+Batch Training - Weighted Loss Evolution'
     fig.suptitle(title, fontsize=16, fontweight='bold')
 
@@ -421,7 +421,7 @@ def plot_training_losses(losses_pool, comps_pool, sample_losses=None, sample_com
     ax3.grid(True, alpha=0.3)
 
     # Plot 4: Water Table Head Weighted Loss
-    ax4 = axes[1, 0]
+    ax4 = axes[0, 3]
     if plot_sample:
         ax4.semilogy(x_data, loss_comps['wt_head'], 'b-o', label='WT Head Sample Loss', alpha=0.7, markersize=4)
     else:
@@ -432,39 +432,64 @@ def plot_training_losses(losses_pool, comps_pool, sample_losses=None, sample_com
     ax4.legend()
     ax4.grid(True, alpha=0.3)
 
-    # Plot 5: Initial Condition Weighted Loss
-    ax5 = axes[1, 1]
+    # Plot 5: Water Table Kinematic Weighted Loss
+    ax5 = axes[1, 0]
     if plot_sample:
-        ax5.semilogy(x_data, loss_comps['ic_h'], 'b-o', label='IC Sample Loss', alpha=0.7, markersize=4)
+        ax5.semilogy(x_data, loss_comps['wt_kin'], 'b-o', label='WT Kin Sample Loss', alpha=0.7, markersize=4)
     else:
-        ax5.semilogy(x_data, loss_comps['ic_h'], 'r-', label='IC Batch Loss', alpha=0.7)
+        ax5.semilogy(x_data, loss_comps['wt_kin'], 'r-', label='WT Kin Batch Loss', alpha=0.7)
     ax5.set_xlabel('Epoch')
-    ax5.set_ylabel('IC Weighted Loss')
-    ax5.set_title('Initial Condition Weighted Loss')
+    ax5.set_ylabel('WT Kin Weighted Loss')
+    ax5.set_title('Water Table Kinematic Weighted Loss')
     ax5.legend()
     ax5.grid(True, alpha=0.3)
 
-    # Plot 6: Final Weighted Loss Summary
-    ax6 = axes[1, 2]
+    # Plot 6: Initial Condition (h) Weighted Loss
+    ax6 = axes[1, 1]
+    if plot_sample:
+        ax6.semilogy(x_data, loss_comps['ic_h'], 'b-o', label='IC(h) Sample Loss', alpha=0.7, markersize=4)
+    else:
+        ax6.semilogy(x_data, loss_comps['ic_h'], 'r-', label='IC(h) Batch Loss', alpha=0.7)
+    ax6.set_xlabel('Epoch')
+    ax6.set_ylabel('IC(h) Weighted Loss')
+    ax6.set_title('Initial Condition (h) Weighted Loss')
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
+
+    # Plot 7: Initial Condition (zb) Weighted Loss
+    ax7 = axes[1, 2]
+    if plot_sample:
+        ax7.semilogy(x_data, loss_comps['ic_zb'], 'b-o', label='IC(zb) Sample Loss', alpha=0.7, markersize=4)
+    else:
+        ax7.semilogy(x_data, loss_comps['ic_zb'], 'r-', label='IC(zb) Batch Loss', alpha=0.7)
+    ax7.set_xlabel('Epoch')
+    ax7.set_ylabel('IC(zb) Weighted Loss')
+    ax7.set_title('Initial Condition (zb) Weighted Loss')
+    ax7.legend()
+    ax7.grid(True, alpha=0.3)
+
+    # Plot 8: Final Weighted Loss Summary
+    ax8 = axes[1, 3]
     # Create bar plot showing final weighted losses
-    loss_names = ['Total', 'PDE', 'Surf BC', 'WT Head', 'IC']
+    loss_names = ['Total', 'PDE', 'Surf BC', 'WT Head', 'WT Kin', 'IC(h)', 'IC(zb)']
     pool_final = [total_losses[-1], loss_comps['pde'][-1], loss_comps['surf'][-1],
-                 loss_comps['wt_head'][-1], loss_comps['ic_h'][-1]]
+                 loss_comps['wt_head'][-1], loss_comps['wt_kin'][-1],
+                 loss_comps['ic_h'][-1], loss_comps['ic_zb'][-1]]
 
     x_bar = np.arange(len(loss_names))
     width = 0.7
 
     color = 'blue' if plot_sample else 'red'
     label = 'Final Sample Loss' if plot_sample else 'Final Batch Loss'
-    bars = ax6.bar(x_bar, pool_final, width, label=label, alpha=0.7, color=color)
+    bars = ax8.bar(x_bar, pool_final, width, label=label, alpha=0.7, color=color)
 
-    ax6.set_ylabel('Final Weighted Loss Value')
-    ax6.set_title('Final Weighted Loss Summary')
-    ax6.set_xticks(x_bar)
-    ax6.set_xticklabels(loss_names, rotation=45)
-    ax6.legend()
-    ax6.set_yscale('log')
-    ax6.grid(True, alpha=0.3)
+    ax8.set_ylabel('Final Weighted Loss Value')
+    ax8.set_title('Final Weighted Loss Summary')
+    ax8.set_xticks(x_bar)
+    ax8.set_xticklabels(loss_names, rotation=45, ha='right')
+    ax8.legend()
+    ax8.set_yscale('log')
+    ax8.grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.show()

@@ -15,17 +15,17 @@ class NormalizationHelper:
             L: characteristic length scale (domain depth) [m]
             S_max: maximum sink term [1/s]
         """
-        # Store original soil parameters
-        self.theta_s = soil_params['theta_s']
-        self.theta_r = soil_params['theta_r']
-        self.alpha = soil_params['alpha']  # [1/m]
-        self.n = soil_params['n']
+        # Store original soil parameters (ensure float conversion)
+        self.theta_s = float(soil_params['theta_s'])
+        self.theta_r = float(soil_params['theta_r'])
+        self.alpha = float(soil_params['alpha'])  # [1/m]
+        self.n = float(soil_params['n'])
         self.m = 1.0 - 1.0 / self.n
-        self.Ks = soil_params['Ks']  # [m/s]
-        self.l = soil_params['l']
-        
+        self.Ks = float(soil_params['Ks'])  # [m/s]
+        self.l = float(soil_params['l'])
+
         # Characteristic scales
-        self.L = L  # Length scale [m]
+        self.L = float(L)  # Length scale [m]
         self.H_star = L  # Head scale (H_* = L) [m]
         self.K_star = self.Ks  # Conductivity scale [m/s]
         self.Q_star = self.Ks  # Flux scale [m/s]
@@ -122,14 +122,14 @@ class NormalizationHelper:
         denom = (1.0 + (self.alpha_tilde * abs_h_tilde).pow(self.n)).pow(self.m)
         denom = denom + self._tiny
         Se = 1.0 / denom
-        
+
         # Se = 1 when h̃ >= 0 (saturated)
         Se = torch.where(
             h_tilde >= 0.0,
             torch.ones_like(h_tilde),
             Se
         )
-        
+
         # Clamp to valid range
         return torch.clamp(Se, 1e-6, 1.0 - 1e-6)
     
@@ -139,18 +139,18 @@ class NormalizationHelper:
         K̃(h̃) = k_r(S_e) using Mualem model
         """
         Se = self.Se_tilde(h_tilde)
-        
+
         # Mualem model: k_r = Se^l × [1 - (1 - Se^(1/m))^m]^2
         Se_1m = Se.pow(1.0 / self.m)
         kr = (Se.pow(self.l)) * (1.0 - (1.0 - Se_1m).pow(self.m)).pow(2)
-        
+
         # K̃ = 1 when h̃ >= 0 (saturated)
         K_tilde = torch.where(
             h_tilde >= 0.0,
             torch.ones_like(h_tilde),
             torch.clamp(kr, 0.0, 1.0)
         )
-        
+
         return K_tilde
     
     def C_tilde(self, h_tilde):
