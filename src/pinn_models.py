@@ -106,6 +106,7 @@ class RichardsPINN(nn.Module):
         self,
         soil_params,
         theta0_data,
+        et_data=None,
         Sy=0.3,
         zr=0.5,
         h_net_config=None,
@@ -123,6 +124,8 @@ class RichardsPINN(nn.Module):
         Args:
             soil_params: Soil parameters dict (for normalizer)
             theta0_data: Tuple of (times, soil_moisture) in DIMENSIONAL form - REQUIRED
+            et_data: Tuple of (times, evaporation_rate) in DIMENSIONAL form [s, 1/s] - OPTIONAL
+                     If None, uses S_max from normalizer as constant rate
             Sy: Specific yield (dimensional)
             zr: Root zone depth (dimensional) [m]
             h_net_config: Config dict for pressure head network
@@ -185,8 +188,19 @@ class RichardsPINN(nn.Module):
         self.theta0_values_tilde = (self.theta0_values_dim - normalizer.theta_r) / normalizer.theta_star
         self.theta0_times_tilde = normalizer.normalize_t(self.theta0_times_dim)
 
-        # Store S_max_tilde from normalizer
-        self.S_max_tilde = normalizer.S_max_tilde
+        # Store and normalize ET data (if provided)
+        if et_data is not None:
+            self.et_times_dim = torch.tensor(et_data[0], dtype=torch.float32, device=device)
+            self.et_values_dim = torch.tensor(et_data[1], dtype=torch.float32, device=device)
+
+            # Normalize ET: S̃ = S × L / K_*
+            self.et_values_tilde = normalizer.normalize_S(self.et_values_dim)
+            self.et_times_tilde = normalizer.normalize_t(self.et_times_dim)
+            self.use_et_data = True
+        else:
+            # Fallback to constant S_max from normalizer
+            self.S_max_tilde = normalizer.S_max_tilde
+            self.use_et_data = False
 
         # Store IC type
         self.ic_type = ic_type
@@ -250,11 +264,54 @@ class RichardsPINN(nn.Module):
 
         return theta0_tilde_interp.reshape_as(t_tilde)
 
+    def et_rate_tilde(self, t_tilde):
+        """Prescribed dimensionless ET rate S̃(t̃) - interpolated from input data (GPU-optimized)"""
+        t_flat = t_tilde.flatten()
+
+        # Vectorized searchsorted for all points at once (GPU-efficient)
+        indices = torch.searchsorted(self.et_times_tilde, t_flat)
+        indices = torch.clamp(indices, 1, len(self.et_times_tilde) - 1)
+
+        # Get surrounding time and ET rate values (vectorized)
+        t1 = self.et_times_tilde[indices - 1]
+        t2 = self.et_times_tilde[indices]
+        et1 = self.et_values_tilde[indices - 1]
+        et2 = self.et_values_tilde[indices]
+
+        # Vectorized linear interpolation
+        alpha = (t_flat - t1) / (t2 - t1 + 1e-12)
+        et_tilde_interp = et1 + alpha * (et2 - et1)
+
+        return et_tilde_interp.reshape_as(t_tilde)
+
     def root_uptake_tilde(self, z_tilde, t_tilde):
-        """Dimensionless root uptake S̃(z̃,t̃) in the root zone"""
+        """
+        Dimensionless root uptake S̃(z̃,t̃) = β(z̃) × T̃_p(t̃)
+
+        Where:
+          - T̃_p(t̃) is potential transpiration rate [dimensionless]
+          - β(z̃) is root density distribution (simple exponential form)
+
+        Exponential distribution:
+          β(z̃) = (1/z̃_r) exp(z̃/z̃_r)  for z̃ ∈ [-z̃_r, 0]
+          Note: ∫_{-z̃_r}^{0} β(z̃) dz̃ = 1 - e^{-1} ≈ 0.632 (not exactly 1)
+        """
+        # Get potential transpiration rate T̃_p(t̃)
+        if self.use_et_data:
+            Tp_tilde = self.et_rate_tilde(t_tilde)
+        else:
+            Tp_tilde = self.S_max_tilde
+
+        # Root distribution β(z̃) = (1/z̃_r) exp(z̃/z̃_r)
+        beta = (1.0 / self.zr_tilde) * torch.exp(z_tilde / self.zr_tilde)
+
+        # Total uptake: S̃(z̃,t̃) = β(z̃) × T̃_p(t̃)
+        S_uptake = beta * Tp_tilde
+
+        # Apply only in root zone (z̃ >= -z̃_r), zero below
         return torch.where(
-            z_tilde >= -self.zr_tilde, 
-            torch.full_like(z_tilde, self.S_max_tilde), 
+            z_tilde >= -self.zr_tilde,
+            S_uptake,
             torch.zeros_like(z_tilde)
         )
 

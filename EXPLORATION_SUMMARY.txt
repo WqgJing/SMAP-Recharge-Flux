@@ -1,0 +1,517 @@
+================================================================================
+SMAP-RECHARGE-FLUX CODEBASE EXPLORATION - SUMMARY
+================================================================================
+
+PROJECT: Physics-Informed Neural Networks (PINN) for Richards Equation
+PURPOSE: Solve subsurface water flow with moving water table using soil moisture observations
+STATUS: Production-ready with Unified API v1.0
+
+================================================================================
+1. OVERALL STRUCTURE & PURPOSE
+================================================================================
+
+PHYSICS DOMAIN:
+- Richards equation (variably saturated flow)
+- Van Genuchten-Mualem constitutive relations
+- Moving boundary condition (water table as learned variable)
+- Surface moisture BC from observations
+- Multiple observation depths for validation
+
+KEY INNOVATION:
+- YAML-driven configuration system (no hardcoded parameters)
+- Unified dataset container (PINNDataset class)
+- Gradient-based adaptive BC sampling (3-way strategy)
+- Fully GPU-optimized vectorized operations
+
+PROJECT STRUCTURE (13 Python modules):
+- pinn_models.py (545 lines) - Neural networks
+- normalization_helper.py (180 lines) - Dimensional analysis
+- gradient_based_sampling.py (359 lines) - Adaptive BC sampling (KEY)
+- train_loop.py (1181 lines) - Main training pipeline
+- training_utils.py (700 lines) - Loss functions, weight management
+- dataset.py (400 lines) - Unified data container
+- config_loader.py (313 lines) - YAML configuration
+- data_loader.py (1000 lines) - Excel/CSV data handling
+- visualization.py (600 lines) - Plotting & results
+- training_logger.py (200 lines) - Experiment tracking
+
+CONFIGURATION FILES:
+- 16 YAML configs for different sites/datasets
+- Baseline: Calhoun CCZO forest site data
+- Others: AmeriFlux sites (US-Uaf, US-ONA, US-Clf, etc.)
+
+================================================================================
+2. KEY THEORETICAL COMPONENTS
+================================================================================
+
+RICHARDS EQUATION (Dimensionless Form):
+∂S_e/∂t̃ + ∂q̃/∂z̃ + S̃ = 0
+
+Where:
+- S_e = effective saturation ∈ [0,1]
+- q̃ = -K̃(∂h̃/∂z̃ + 1) (dimensionless flux)
+- S̃ = root uptake sink term
+
+VAN GENUCHTEN-MUALEM RELATIONS:
+- Water retention: S_e(h) = [1 + (α|h|)^n]^(-m)
+- Relative conductivity: K_r = Se^l × [1 - (1 - Se^(1/m))^m]²
+- Storage: C = dS_e/dh
+
+NORMALIZATION (CRITICAL):
+- All terms scaled to O(1) for numerical stability
+- Time scale: T = θ_* L / K_* (length × water content span / conductivity)
+- Head scale: H_* = L
+- Conductivity scale: K_* = K_s (saturated)
+- Essential for fine-tuning (preserves time scale across datasets)
+
+BOUNDARY CONDITIONS:
+1. Surface (Dirichlet): θ0(t) from observations (first depth in YAML)
+2. Water table head: h = 0 at z_b
+3. Water table kinematic: dz_b/dt = q / S_y
+4. Initial conditions: 3 types (obs, linear, hydrostatic)
+
+LOSS FUNCTIONS (6 Components):
+1. PDE residual (interior points)
+2. Surface BC (moisture observation)
+3. Water table head BC (h = 0)
+4. Water table kinematic BC (water balance)
+5. Initial condition (head)
+6. Initial condition (water table depth)
+
+All weighted adaptively using gradient-based log-space updates.
+
+================================================================================
+3. SAMPLING STRATEGIES (ADVANCED)
+================================================================================
+
+COLLOCATION POINTS (Interior):
+- Direct sampling: no cache
+- Time: Uniform[0, t_max]
+- Depth: Normalized u ∈ [0,1], mapped to z = -u × z_b(t)
+- Boundary concentration: 70% near boundaries (Beta distributions)
+
+GRADIENT-BASED BC SAMPLING (KEY INNOVATION):
+- File: src/gradient_based_sampling.py
+- Purpose: Focus samples where boundary condition changes rapidly
+
+THREE-WAY STRATEGY:
+1. Gradient-Interpolated (80%):
+   - Compute |dθ0/dt| at BC points
+   - Identify high-gradient intervals (top 30% percentile)
+   - Create interpolated points within intervals (α ∈ [0,1])
+   - Weight by |dθ0/dt|^power
+
+2. Neighbor Points (5%):
+   - Points adjacent to high-gradient regions
+   - Vectorized tensor operations (no Python loops)
+
+3. Baseline (15%):
+   - Uniform random from all BC times
+   - Ensures coverage in low-gradient regions
+
+GPU OPTIMIZATION:
+- Fully vectorized (no .item() in inner loop)
+- Single batched CPU sync at end
+- Deferred gradient computation
+- Handles spiky/sharp BC transitions naturally
+
+INITIAL CONDITION SAMPLING:
+- Time: fixed at t_min
+- Depth: Random u ∈ [0, 1], z_ic = -u × z_b(t_min)
+
+================================================================================
+4. MODEL ARCHITECTURE & PINN IMPLEMENTATION
+================================================================================
+
+NEURAL NETWORKS:
+- PressureHeadNet: 2-input (z_scaled, t_scaled) → scalar h̃
+  Architecture: Linear → Tanh → [Linear → Tanh] × layers → Linear
+  Typical: 64 hidden units, 4 layers (can adjust for domain size)
+
+- WaterTableNet: 1-input (t_scaled) → scalar z̃_b > 0
+  Same architecture, 32 hidden units, 3 layers
+  Output: Softplus ensures z_b > 0
+
+INPUT SCALING:
+- z_scaled = (z_tilde + z_max) / z_max (maps [-1,0] to [0,1])
+- t_scaled = t_tilde / t_ref_tilde (maps time to [0,1])
+
+RICHADSPINN CLASS (Main Model):
+Public API (accepts dimensional inputs):
+- pde_residual(z, t) → PDE interior residual
+- surface_moisture_bc_residual(t) → BC residual
+- water_table_head_residual(t) → h = 0 at water table
+- water_table_kinematic_residual(t) → dz_b/dt = q/S_y
+- initial_conditions_residual(z, t0) → IC enforcement
+- predict_head(z, t) → dimensional h(z,t)
+- predict_water_table(t) → dimensional z_b(t)
+
+AUTOMATIC DIFFERENTIATION:
+- PyTorch autograd for all PDE derivatives
+- Creates computation graph through first & second derivatives
+- Enables training via residual minimization
+
+================================================================================
+5. TRAINING METHODOLOGY
+================================================================================
+
+MAIN TRAINING FUNCTION:
+train_pinn_pool_batch_autoweight() (train_loop.py:21-452)
+
+TRAINING LOOP (Pseudo-code):
+```
+for epoch in range(n_epochs):
+    1. Sample collocation points (direct, no cache)
+    2. Sample BC points (gradient-based 3-way)
+    3. Sample IC points
+    4. Compute 6 loss components
+    5. Apply adaptive weights (log-space update)
+    6. Backprop + optimizer step
+    7. Update weights (every 100-10000 epochs)
+    8. Save checkpoint (every 10000 epochs)
+```
+
+OPTIMIZER:
+- Adam (PyTorch)
+- Learning rate: 1e-4 to 5e-4 typical
+- Epochs: 10k-50k typical
+
+ADVANCED FEATURES (HPC):
+- Mixed Precision (AMP): fp16 for memory efficiency
+- Multi-GPU: torch.nn.DataParallel auto-detection
+- Gradient Accumulation: effective batch scaling
+- Checkpointing: resume from intermediate epochs
+
+ADAPTIVE WEIGHT MANAGEMENT:
+- WeightManager class (training_utils.py)
+- Algorithm:
+  1. Compute unweighted per-sample gradients
+  2. EMA smoothing (α=0.9)
+  3. Target = median of EMA gradients
+  4. Log-space multiplicative update
+  5. Cap per-update jump (max_step_factor=2.0)
+  6. Clamp bounds [1e-10, 1e10]
+- Prevents single loss component from dominating
+
+CHECKPOINTING & RESUMPTION:
+- Saved every 10k epochs: model, optimizer, weights, metadata
+- Includes normalization params (CRITICAL for fine-tuning)
+- Resume with: finetune_pinn(checkpoint_path, new_data)
+- Preserves time scale T across datasets
+
+METRICS & MONITORING:
+- Per-component loss tracked
+- Sample loss computed every 500 epochs (over 5k points)
+- Gradient norms per component
+- TrainingLogger for CSV/JSON export
+
+================================================================================
+6. DATA PROCESSING & HANDLING
+================================================================================
+
+DATA PIPELINE:
+1. Excel/CSV file reading
+2. Column mapping (YAML-driven, handles multi-level headers)
+3. Missing value replacement (-9999, -6999 → NaN)
+4. Interpolation (gaps ≤ max_gap_hours)
+5. Date filtering (start_date to end_date)
+6. Output: times_seconds, depths_names, theta arrays
+
+UNIFIED DATASET CONTAINER (PINNDataset):
+- Single source of truth for all data
+- Automatically loaded from YAML config
+- Attributes:
+  - bc_times, bc_values (surface moisture BC)
+  - obs_times, obs_depths, obs_theta (observations at multiple depths)
+  - ic_profile (initial condition)
+  - soil_params, n_epochs, h_net_config (all parameters)
+
+KEY CONVENTION:
+- First depth in YAML → surface BC (mandatory)
+- Other depths → validation only (optional)
+- Automatic adaptation: works with 3-10+ depths
+
+OPTIONAL DATA:
+- Water table depth (WTD): auto-loaded if in YAML
+- Added to plots if present, skipped otherwise
+
+NAN HANDLING (3-level):
+1. Loading: Replace codes, interpolate small gaps
+2. Plotting: Keep NaNs (matplotlib shows gaps)
+3. Statistics: Remove before RMSE/MAE
+
+================================================================================
+7. CONFIGURATION SYSTEM (YAML-DRIVEN)
+================================================================================
+
+SECTIONS IN YAML:
+1. data: path, dates, column_mapping
+2. soil: theta_s, theta_r, alpha, n, Ks, l (van Genuchten)
+3. training: n_epochs, learning_rate, device, seed
+4. network: h_net, zb_net architectures
+5. sampling: batch_size, resample_freq, boundary_ratio
+6. boundary_sampling: batch_size_bc, interp/neighbor/baseline ratios
+7. optimization: weight_update_freq, use_amp, use_multi_gpu
+8. checkpointing: dir, freq, keep_last_n
+9. physics: Sy, zr, L, S_max, zb_initial, ic_type
+10. output: output directory
+
+COLUMN MAPPING (Multi-format Support):
+- Single-level headers: depth_name: 'column_name'
+- Multi-level headers: depth_name: ['level0', 'level1']
+- Handles different unit conventions
+- AmeriFlux CSV with timestamps
+
+ADDING NEW DATASETS (No Code Changes):
+1. Copy configs/new_site_template.yaml
+2. Edit data.path and column_mapping
+3. Edit soil parameters
+4. Run: python hpc/train_simple.py --config configs/new.yaml
+
+================================================================================
+8. ENTRY POINTS & USAGE
+================================================================================
+
+SIMPLE TRAINING SCRIPT (Recommended):
+python hpc/train_simple.py --config configs/baseline.yaml
+- Output: output_YYYYMMDD_HHMMSS/ with results, losses, checkpoints
+
+JUPYTER NOTEBOOK:
+notebooks/train_simple.ipynb (3 cells)
+- Load data, train, visualize
+
+PROGRAMMATIC API (Backward Compatible):
+from src.train_loop import train_pinn_pool_batch_autoweight
+model = train_pinn_pool_batch_autoweight(
+    soil_params={...}, theta0_data=(...), ...
+)
+
+NEW UNIFIED API:
+from src.dataset import PINNDataset
+from src.train_loop import train_pinn
+
+dataset = PINNDataset('configs/baseline.yaml')
+model, losses, comps, sl, sc, se = train_pinn(dataset, device='cuda')
+
+FINE-TUNING:
+from src.train_loop import finetune_pinn
+model_ft, *_ = finetune_pinn(
+    checkpoint_path='checkpoints/checkpoint_final.pt',
+    new_theta0_data=new_data
+)
+
+================================================================================
+9. GRADIENT-BASED SAMPLING IN DETAIL
+================================================================================
+
+MOTIVATION:
+Traditional uniform BC sampling treats all boundary points equally.
+Gradient-based sampling concentrates where boundary condition changes rapidly.
+
+IMPLEMENTATION STEPS:
+1. Compute temporal gradient: dθ/dt = Δθ / Δt
+2. Normalize by sum: weights = |dθ/dt| / Σ|dθ/dt|
+3. Identify high-gradient intervals (top percentile)
+4. Allocate samples:
+   - 80% from interpolated within high-gradient intervals
+   - 5% from neighbors of high-gradient regions
+   - 15% from uniform baseline
+5. GPU optimize: vectorized, single sync at end
+
+BENEFITS:
+- Captures spiky/sharp BC transitions naturally
+- Data-driven: adapts to actual BC characteristics
+- GPU-efficient: fully vectorized implementation
+- Improved convergence near BC inflection points
+
+================================================================================
+10. NORMALIZATION & DIMENSIONAL ANALYSIS
+================================================================================
+
+WHY NORMALIZE:
+Dimensional PDE has mixed scales (O(10^-5) to O(10^-7)).
+Networks struggle with such disparate magnitudes.
+
+SOLUTION:
+Choose characteristic scales to make all terms O(1):
+- L: domain depth
+- T = θ_* L / K_*: time scale
+- H_* = L: head scale
+- K_* = K_s: conductivity scale
+
+RESULT: All PDE terms ~ O(1) in dimensionless form
+
+IMPLEMENTATION:
+NormalizationHelper class provides:
+- normalize_z, normalize_t, normalize_h
+- denormalize_z, denormalize_t, denormalize_h
+- Se_tilde(h_tilde): dimensionless saturation
+- K_tilde(h_tilde): dimensionless conductivity
+
+CRITICAL FOR FINE-TUNING:
+Time scale T preserved from base model ensures:
+- Networks see same relative durations
+- Weights transfer meaningfully
+- Only BC data changes, not fundamental scales
+
+================================================================================
+11. KEY FILES & RESPONSIBILITIES
+================================================================================
+
+pinn_models.py (545 lines):
+- RichardsPINN: main PINN model
+- PressureHeadNet: h network
+- WaterTableNet: z_b network
+- All residual computation methods
+
+normalization_helper.py (180 lines):
+- NormalizationHelper: dimensional analysis
+- Forward/inverse van Genuchten relations
+
+gradient_based_sampling.py (359 lines):
+- gradient_based_sampling(): 3-way BC sampling
+- compute_gradient_weights(): gradient extraction
+- visualize_gradient_sampling(): diagnostic plots
+
+train_loop.py (1181 lines):
+- train_pinn_pool_batch_autoweight(): main training
+- finetune_pinn(): fine-tuning on new data
+- load_pretrained_model(): checkpoint loading
+- Checkpointing logic
+
+training_utils.py (700 lines):
+- compute_losses(): 6 loss components
+- WeightManager: adaptive weighting
+- SamplingHelpers: collocation + IC sampling
+- compute_full_sample_loss(): validation loss
+
+dataset.py (400 lines):
+- PINNDataset: unified data container
+- Automatic YAML loading and parsing
+- Get BC, IC, observations, WTD
+
+config_loader.py (313 lines):
+- PINNConfig: YAML configuration class
+- load_config(): convenience function
+- Property-based access to all parameters
+
+data_loader.py (1000 lines):
+- load_soil_moisture(): Excel/CSV loading
+- Column mapping, date filtering, NaN handling
+- Multi-level header support
+
+visualization.py (600 lines):
+- plot_comprehensive_results(): 6-subplot figure
+- plot_losses(): training curves
+- plot_results(): new unified visualization
+
+training_logger.py (200 lines):
+- TrainingLogger: experiment tracking
+- CSV/JSON export
+- Statistics computation
+
+================================================================================
+12. ARCHITECTURE STRENGTHS & KEY INNOVATIONS
+================================================================================
+
+STRENGTHS:
+✅ GPU-accelerated: fully vectorized operations
+✅ YAML-driven: no code changes for new datasets
+✅ Unified API: single dataset container
+✅ Adaptive weights: automatic loss balancing
+✅ Gradient-based BC sampling: data-aware sampling
+✅ Checkpointing: fault-tolerant HPC training
+✅ Fine-tuning: transfer learning capability
+✅ Multi-depth: automatic adaptation to any depth count
+
+KEY INNOVATION - GRADIENT-BASED BC SAMPLING:
+- Concentrates samples at rapid boundary transitions
+- 3-way strategy: interpolated + neighbors + baseline
+- Fully GPU-optimized: no Python loops
+- Data-driven: adapts to actual BC characteristics
+- Improves convergence near inflection points
+
+SCALABILITY:
+- Single GPU (A100): ~500 ms/epoch for 50k samples
+- Multi-GPU (2×A100): ~300 ms/epoch (1.6× speedup)
+- 50k epochs: 6-10 hours on GPU
+- Memory efficient: vectorized, can handle large batches
+
+================================================================================
+13. THEORETICAL FOUNDATION
+================================================================================
+
+PHYSICS:
+- Richards equation with van Genuchten-Mualem
+- Includes root uptake as sink term
+- Moving boundary at water table
+
+MATHEMATICS:
+- Dimensionless formulation (all terms O(1))
+- Automatic differentiation via PyTorch
+- Least squares residual minimization
+- Convergence to exact solution when residuals → 0
+
+CONSTRAINTS:
+- Surface BC from observations (Dirichlet)
+- WT pressure BC (h = 0 at water table)
+- WT kinematic BC (water balance)
+- Initial condition (prescribed profile)
+
+VALIDATION:
+- Multi-depth observation comparison
+- RMSE/MAE at each depth
+- Water table depth validation (if available)
+- Residual field visualization
+
+================================================================================
+14. QUICK START
+================================================================================
+
+INSTALL:
+pip install -r requirements.txt
+# Main deps: torch, pandas, numpy, matplotlib, pyyaml
+
+TRAIN FROM SCRATCH:
+python hpc/train_simple.py --config configs/baseline.yaml
+
+RESUME FROM CHECKPOINT:
+python hpc/train_simple.py --config configs/baseline.yaml \
+  --load-checkpoint checkpoints_train/checkpoint_epoch_5000.pt
+
+ADD NEW DATASET:
+1. Create configs/new_site.yaml (copy new_site_template.yaml)
+2. Edit data.path, column_mapping, soil params
+3. python hpc/train_simple.py --config configs/new_site.yaml
+
+FINE-TUNE:
+from src.train_loop import finetune_pinn
+model_ft, *_ = finetune_pinn(
+    'checkpoints/checkpoint_final.pt',
+    new_theta0_data
+)
+
+================================================================================
+15. SUMMARY
+================================================================================
+
+This is a production-ready PINN system for solving the Richards equation with
+moving water table boundaries. The key innovation is gradient-based adaptive
+boundary condition sampling, which concentrates training samples where the
+boundary condition changes most rapidly.
+
+The YAML-driven architecture allows training on new datasets without any code
+changes. All physics is parameterized through configuration files, making the
+system highly flexible and reproducible.
+
+The unified PINNDataset container provides a clean API for data access, while
+the modular architecture separates concerns (models, losses, sampling, logging).
+
+Multi-depth support with automatic adaptation makes it easy to work with
+different observation networks. Fine-tuning capability enables transfer learning
+across time periods with the same site.
+
+Production features include checkpointing for fault tolerance, multi-GPU support,
+mixed precision training, and comprehensive logging for reproducibility.
+
+================================================================================

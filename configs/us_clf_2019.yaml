@@ -11,8 +11,8 @@
 # ============================================================================
 data:
   path: 'data/AMF_US-CLF_BASE_HH_1-5.csv'
-  start_date: '2019-01-01'   # Start of 2019
-  end_date: '2019-12-31'     # End of 2019 (1 year)
+  start_date: '2019-07-01'   # Start of 2019
+  end_date: '2019-08-2'     # End of 2019 (1 year)
   interpolate: true
   max_gap_hours: 6
 
@@ -43,18 +43,18 @@ data:
 # US-CLF is conservation tillage cropland with silt loam soils
 # Ridge and valley region of Pennsylvania
 soil:
-  theta_s: 0.43    # Saturated water content [-] (silt loam)
+  theta_s: 0.45    # Saturated water content [-] (silt loam)
   theta_r: 0.065   # Residual water content [-] (silt loam)
   alpha: 2.0       # van Genuchten α [1/m] (silt loam)
   n: 1.41          # van Genuchten n (>1) [-] (silt loam)
-  Ks: 4.5e-6       # Saturated hydraulic conductivity [m/s] (moderate)
+  Ks: 4.0e-6       # Saturated hydraulic conductivity [m/s] (moderate)
   l: 0.5           # Mualem pore-connectivity parameter [-]
 
 # ============================================================================
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 5000
+  n_epochs: 500000
   learning_rate: 1.0e-4
   device: 'auto'      # 'auto' (use GPU if available), 'cuda', or 'cpu'
   seed: 42
@@ -74,11 +74,11 @@ network:
 # CACHE POOL & BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 10000           # Total candidate points in pool
-  batch_size: 500             # Points sampled per iteration
-  resample_freq: 10000        # Update residuals every N epochs
-  boundary_ratio: 0.7         # Fraction of cache near boundaries (0-1)
-  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
+  cache_size: 0           # Total candidate points in pool
+  batch_size: 3000             # Points sampled per iteration
+  resample_freq: 10000000000        # Update residuals every N epochs
+  boundary_ratio: 0        # Fraction of cache near boundaries (0-1)
+  high_residual_ratio: 0   # Fraction from high-residual regions (0-1)
   temperature: 0.3            # Softmax temperature (lower = more aggressive)
 
 # ============================================================================
@@ -120,7 +120,7 @@ physics:
   zr: 0.5                     # Root zone depth [m] (cropland)
   L: 3.0                      # Characteristic length [m]
   S_max: 1.5e-7               # Maximum sink term [1/s]
-  zb_initial: 3.5             # Initial water table depth [m] (deeper water table)
+  zb_initial: 3.7             # Initial water table depth [m] (deeper water table)
   ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
 
 # ============================================================================

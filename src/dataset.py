@@ -332,6 +332,56 @@ class PINNDataset:
             if self.verbose:
                 print(f"\n✗ No WTD data specified in config")
 
+        # ==================== Load ET Data (Optional) ====================
+        et_col = column_mapping.get('et', None)
+        if et_col is not None:
+            try:
+                if self.verbose:
+                    print(f"\n--- Loading ET Data ---")
+
+                # Get ET column from dataframe
+                if column_mapping.get('multi_level_header', False):
+                    if isinstance(et_col, list):
+                        et_raw = df[tuple(et_col)]
+                    else:
+                        et_raw = df[et_col]
+                else:
+                    et_raw = df[et_col]
+
+                # Apply unit conversion if specified
+                et_conversion = column_mapping.get('et_conversion', 1.0)
+                et_clean = et_raw * et_conversion
+
+                # Remove NaN values and align with obs_times
+                valid_mask = ~pd.isna(et_clean)
+                if valid_mask.any() and len(et_clean) == len(self.obs_times):
+                    self.et_times = self.obs_times[valid_mask]
+                    self.et_values = et_clean[valid_mask].values
+
+                    if self.verbose:
+                        print(f"✓ ET data loaded successfully")
+                        print(f"  Column: {et_col}")
+                        print(f"  Unit conversion: {et_conversion}")
+                        print(f"  Valid points: {len(self.et_values)}")
+                        print(f"  Range: {self.et_values.min():.2e} - {self.et_values.max():.2e} [1/s]")
+                else:
+                    self.et_times = None
+                    self.et_values = None
+                    if self.verbose:
+                        print(f"⚠ ET column found but no valid data")
+
+            except Exception as e:
+                self.et_times = None
+                self.et_values = None
+                if self.verbose:
+                    print(f"⚠ Failed to load ET: {e}")
+        else:
+            self.et_times = None
+            self.et_values = None
+
+            if self.verbose:
+                print(f"\n✗ No ET data specified in config (will use constant S_max)")
+
     def _extract_parameters(self):
         """Extract all training and physics parameters from config."""
         config = self.config
@@ -407,6 +457,21 @@ class PINNDataset:
     def has_wtd(self) -> bool:
         """Check if water table depth observations are available."""
         return self.wtd_values is not None and len(self.wtd_values) > 0
+
+    def get_et_data(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Get ET data as tuple for training.
+
+        Returns:
+            (times, values): ET time points and values [s, 1/s], or None if not available
+        """
+        if self.et_values is not None and len(self.et_values) > 0:
+            return (self.et_times, self.et_values)
+        return None
+
+    def has_et(self) -> bool:
+        """Check if ET observations are available."""
+        return self.et_values is not None and len(self.et_values) > 0
 
     def has_obs_at_depth(self, depth_name: str) -> bool:
         """Check if observations are available at specific depth."""

@@ -51,7 +51,7 @@ soil:
 # TRAINING CONFIGURATION
 # ============================================================================
 training:
-  n_epochs: 50000
+  n_epochs: 10000
   learning_rate: 1.0e-4
   device: 'auto'      # 'auto', 'cuda', or 'cpu'
   seed: 44
@@ -119,6 +119,7 @@ physics:
   S_max: 1.0e-7               # Maximum sink term [1/s]
   zb_initial: 10             # Initial water table depth [m]
   ic_type: 'obs'      # Initial condition type: 'obs', 'linear', 'hydrostatic'
+  ic_deepest_value: 0.0  # ← Set deepest measurement to 0
 
 # ============================================================================
 # OUTPUT CONFIGURATION
