@@ -73,38 +73,22 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
     # Sample IC over full vadose zone (from water table to surface)
     z_ic_range = torch.linspace(-zb_ic, 0.0, 50, dtype=torch.float32).to(device).view(-1, 1)
 
-    # Prescribed IC - depends on ic_type
+    # Prescribed IC - Automatic Parabolic Profile
+    # Compute h_surface from surface observation at t=0
+    Se_surf_0 = model.theta0_values_tilde[0]  # First observation
+    m = 1.0 - 1.0 / model.normalizer.n
+    inv_term = torch.pow(Se_surf_0, -1.0 / m) - 1.0
+    h_surface = -torch.pow(torch.clamp(inv_term, min=0.0), 1.0 / model.normalizer.n) / model.normalizer.alpha
+    h_surface = h_surface.cpu().numpy()
 
-    if model.ic_type == 'obs' and model.ic_profile is not None:
-        # Option 1: Use measured IC profile extended to water table
-        z_measured = model.ic_profile['z'].cpu().numpy()
-        h_measured = model.ic_profile['h'].cpu().numpy()
+    # Parabolic profile coefficients
+    a = (zb_ic + h_surface) / (zb_ic * zb_ic)
+    b = (zb_ic + 2.0 * h_surface) / zb_ic
+    c = h_surface
 
-        # Extend profile to water table: h(z=-zb_ic) = 0
-        z_wt = -zb_ic
-        h_wt = 0.0
-
-        # Combine measurements with water table point
-        z_extended = np.append(z_measured, z_wt)
-        h_extended = np.append(h_measured, h_wt)
-
-        # Sort by z (most negative to least negative)
-        sort_idx = np.argsort(z_extended)
-        z_extended = z_extended[sort_idx]
-        h_extended = h_extended[sort_idx]
-
-        # Interpolate over full range (includes extrapolation from deepest measurement to water table)
-        h_ic_prescribed = np.interp(z_ic_range.cpu().numpy().flatten(), z_extended, h_extended)
-
-    elif model.ic_type == 'linear' and model.ic_profile is not None:
-        # Option 2: Linear from surface h_obs to water table h=0
-        h_surface = model.ic_profile['h'][model.ic_profile['z'].argmax()].cpu().numpy()
-        z_np = z_ic_range.cpu().numpy().flatten()
-        h_ic_prescribed = h_surface * (1.0 + z_np / zb_ic)
-
-    else:
-        # Hydrostatic IC
-        h_ic_prescribed = (-zb_ic - z_ic_range.cpu().numpy().flatten())
+    # Compute parabolic IC profile
+    z_np = z_ic_range.cpu().numpy().flatten()
+    h_ic_prescribed = a * z_np * z_np + b * z_np + c
 
     # Modeled IC - FIXED
     t_ic_expanded = t_ic.expand(50, 1)
@@ -196,13 +180,7 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
     axs[1, 0].grid(True, alpha=0.3)
 
     # Subplot 5: Initial conditions comparison
-    # Determine IC type for label and plotting style
-    if model.ic_type == 'obs':
-        ic_label = "Prescribed IC [Obs + Extrapolation]"
-    elif model.ic_type == 'linear':
-        ic_label = "Prescribed IC [Linear: h_surf to h=0]"
-    else:
-        ic_label = "Prescribed IC [Hydrostatic]"
+    ic_label = "Prescribed IC [Parabolic: h(0)=h_surf, h(-zb)=0, dh/dz|_{-zb}=-1]"
 
     # Plot prescribed IC line
     axs[1, 1].plot(
@@ -213,13 +191,12 @@ def plot_comprehensive_results(model, bc_data, soil_params, n_t=200, n_z=100, de
         label=ic_label,
     )
 
-    # For obs IC, also show measurement points
-    if model.ic_type == 'obs' and model.ic_profile is not None:
-        axs[1, 1].scatter(
-            model.ic_profile['h'].cpu().numpy(),
-            model.ic_profile['z'].cpu().numpy(),
+    # Show surface observation point that determines h_surface
+    axs[1, 1].scatter(
+            [h_surface],
+            [0.0],
             c='green',
-            s=80,
+            s=150,
             marker='o',
             edgecolors='black',
             linewidths=1.5,

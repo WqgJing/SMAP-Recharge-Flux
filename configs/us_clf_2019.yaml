@@ -45,7 +45,7 @@ data:
 soil:
   theta_s: 0.45    # Saturated water content [-] (silt loam)
   theta_r: 0.065   # Residual water content [-] (silt loam)
-  alpha: 2.0       # van Genuchten α [1/m] (silt loam)
+  alpha: 12.0       # van Genuchten α [1/m] (silt loam)
   n: 1.41          # van Genuchten n (>1) [-] (silt loam)
   Ks: 4.0e-6       # Saturated hydraulic conductivity [m/s] (moderate)
   l: 0.5           # Mualem pore-connectivity parameter [-]
@@ -71,15 +71,11 @@ network:
     num_layers: 3
 
 # ============================================================================
-# CACHE POOL & BATCH SAMPLING (PDE Collocation)
+# BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 0           # Total candidate points in pool
-  batch_size: 3000             # Points sampled per iteration
-  resample_freq: 10000000000        # Update residuals every N epochs
-  boundary_ratio: 0        # Fraction of cache near boundaries (0-1)
-  high_residual_ratio: 0   # Fraction from high-residual regions (0-1)
-  temperature: 0.3            # Softmax temperature (lower = more aggressive)
+  batch_size: 3000             # Points sampled per iteration (GPU-optimized: use 2000-10000+)
+  boundary_ratio: 0.7        # Fraction near boundaries (0=surface, 1=water table)
 
 # ============================================================================
 # BOUNDARY CONDITION SAMPLING (Gradient-Based)
@@ -104,6 +100,14 @@ optimization:
   use_multi_gpu: true              # Use DataParallel if multiple GPUs available
   grad_accumulation_steps: 1       # Gradient accumulation for larger effective batch
 
+  # L-BFGS optimizer switching
+  switch_to_lbfgs_epoch: 1000     # Switch from Adam to L-BFGS at this epoch (null = no switch)
+  lbfgs_lr: 1.0                    # L-BFGS learning rate
+  lbfgs_max_iter: 20               # Max iterations per L-BFGS step (line search)
+  lbfgs_history_size: 50           # History size for Hessian approximation
+  lbfgs_tolerance_grad: 1e-7       # Gradient tolerance for L-BFGS convergence
+  lbfgs_tolerance_change: 1e-9     # Parameter change tolerance
+
 # ============================================================================
 # CHECKPOINTING
 # ============================================================================
@@ -121,7 +125,6 @@ physics:
   L: 3.0                      # Characteristic length [m]
   S_max: 1.5e-7               # Maximum sink term [1/s]
   zb_initial: 3.7             # Initial water table depth [m] (deeper water table)
-  ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
 
 # ============================================================================
 # OUTPUT CONFIGURATION

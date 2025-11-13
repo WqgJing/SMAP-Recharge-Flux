@@ -644,7 +644,7 @@ network:
 
 # Sampling
 sampling:
-  batch_size: 500, resample_freq: 100, ...
+  batch_size: 500, boundary_ratio: 0.7        # Fraction near boundaries
 
 boundary_sampling:
   batch_size_bc: 450

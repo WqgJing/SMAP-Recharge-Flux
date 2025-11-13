@@ -121,28 +121,12 @@ class PINNConfig:
 
     # ========== Sampling Configuration ==========
     @property
-    def cache_size(self) -> int:
-        return int(self._config['sampling']['cache_size'])
-
-    @property
     def batch_size(self) -> int:
         return int(self._config['sampling']['batch_size'])
 
     @property
-    def resample_freq(self) -> int:
-        return int(self._config['sampling']['resample_freq'])
-
-    @property
     def boundary_ratio(self) -> float:
         return float(self._config['sampling']['boundary_ratio'])
-
-    @property
-    def high_residual_ratio(self) -> float:
-        return float(self._config['sampling']['high_residual_ratio'])
-
-    @property
-    def temperature(self) -> float:
-        return float(self._config['sampling']['temperature'])
 
     # ========== Boundary Sampling Configuration ==========
     @property
@@ -198,6 +182,32 @@ class PINNConfig:
     def grad_accumulation_steps(self) -> int:
         return int(self._config['optimization'].get('grad_accumulation_steps', 1))
 
+    @property
+    def switch_to_lbfgs_epoch(self) -> Optional[int]:
+        """Epoch to switch from Adam to L-BFGS (None = no switch)"""
+        epoch = self._config['optimization'].get('switch_to_lbfgs_epoch', None)
+        return int(epoch) if epoch is not None else None
+
+    @property
+    def lbfgs_lr(self) -> float:
+        return float(self._config['optimization'].get('lbfgs_lr', 1.0))
+
+    @property
+    def lbfgs_max_iter(self) -> int:
+        return int(self._config['optimization'].get('lbfgs_max_iter', 20))
+
+    @property
+    def lbfgs_history_size(self) -> int:
+        return int(self._config['optimization'].get('lbfgs_history_size', 50))
+
+    @property
+    def lbfgs_tolerance_grad(self) -> float:
+        return float(self._config['optimization'].get('lbfgs_tolerance_grad', 1e-7))
+
+    @property
+    def lbfgs_tolerance_change(self) -> float:
+        return float(self._config['optimization'].get('lbfgs_tolerance_change', 1e-9))
+
     # ========== Checkpointing Configuration ==========
     @property
     def checkpoint_dir(self) -> str:
@@ -234,10 +244,6 @@ class PINNConfig:
     def zb_initial(self) -> float:
         return float(self._config.get('physics', {}).get('zb_initial', 6.1))
 
-    @property
-    def ic_type(self) -> str:
-        return self._config.get('physics', {}).get('ic_type', 'hydrostatic')
-
     # ========== Output Configuration ==========
     @property
     def output_dir(self) -> str:
@@ -260,13 +266,9 @@ class PINNConfig:
         print(f"\nNetwork:")
         print(f"  h_net: {self.h_net_config}")
         print(f"  zb_net: {self.zb_net_config}")
-        print(f"\nCache Pool & Batch Sampling:")
-        print(f"  Cache size: {self.cache_size}")
+        print(f"\nBatch Sampling:")
         print(f"  Batch size: {self.batch_size}")
-        print(f"  Resample freq: {self.resample_freq}")
         print(f"  Boundary ratio: {self.boundary_ratio}")
-        print(f"  High residual ratio: {self.high_residual_ratio}")
-        print(f"  Temperature: {self.temperature}")
         print(f"\nBoundary Sampling (Gradient-based):")
         print(f"  Batch size BC: {self.batch_size_bc}")
         print(f"  Interp ratio: {self.interp_ratio}")
@@ -282,7 +284,7 @@ class PINNConfig:
         print(f"  Sy: {self.Sy}, zr: {self.zr}")
         print(f"  L: {self.L}, S_max: {self.S_max}")
         print(f"  zb_initial: {self.zb_initial}")
-        print(f"  IC type: {self.ic_type}")
+        print(f"  IC: Parabolic (automatic from surface obs)")
         print(f"\nCheckpointing:")
         print(f"  Directory: {self.checkpoint_dir}")
         print(f"  Frequency: {self.checkpoint_freq}")
@@ -307,7 +309,7 @@ def load_config(config_path: str) -> PINNConfig:
 
     Example:
         >>> config = load_config('configs/baseline.yaml')
-        >>> print(config.cache_size)
-        80000
+        >>> print(config.batch_size)
+        500
     """
     return PINNConfig(config_path)

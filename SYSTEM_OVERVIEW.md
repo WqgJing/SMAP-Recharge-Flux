@@ -179,7 +179,7 @@ model, *_ = train_pinn(dataset)
    ├── Physics: Sy, zr, L, S_max, zb_initial
    ├── Training: n_epochs, learning_rate, device
    ├── Network: h_net, zb_net architectures
-   └── Sampling: cache_size, batch_size, etc.
+   └── Sampling: batch_size, etc.
          ↓
 2. PINNDataset.__init__()
    ├── Load Excel via load_soil_moisture()
@@ -523,7 +523,7 @@ training.learning_rate = 1.0e-5
 1. Use GPU: `device='cuda'`
 2. Enable mixed precision: `use_amp: true`
 3. Reduce network size: `hidden_dim: 32, num_layers: 3`
-4. Reduce cache: `cache_size: 5000`
+4. Reduce cache: `batch_size: 500            # Points sampled per iteration
 
 ---
 

@@ -116,15 +116,11 @@ network:
     num_layers: 3
 
 # ============================================================================
-# CACHE POOL & BATCH SAMPLING (PDE Collocation Points)
+# BATCH SAMPLING (PDE Collocation)
 # ============================================================================
 sampling:
-  cache_size: 10000           # Total candidate points in pool
-  batch_size: 500             # Points sampled per iteration
-  resample_freq: 10000        # Update residuals every N epochs
-  boundary_ratio: 0.7         # Fraction near boundaries (0-1)
-  high_residual_ratio: 0.6    # Fraction from high-residual regions (0-1)
-  temperature: 0.3            # Softmax temperature (lower = more aggressive)
+  batch_size: 500             # Points sampled per iteration (GPU-optimized: use 2000-10000+)
+  boundary_ratio: 0.7        # Fraction near boundaries (0=surface, 1=water table)
 
 # ============================================================================
 # BOUNDARY CONDITION SAMPLING (Surface θ)
@@ -166,7 +162,6 @@ physics:
   L: 4.0                      # Characteristic length [m] (⚠️ UPDATE)
   S_max: 1.0e-7               # Maximum sink term [1/s] (⚠️ UPDATE)
   zb_initial: 5.0             # Initial water table depth [m] (⚠️ UPDATE)
-  ic_type: 'obs'              # Initial condition: 'obs', 'linear', 'hydrostatic'
 
 # ============================================================================
 # OUTPUT CONFIGURATION

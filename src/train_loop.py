@@ -1,5 +1,5 @@
 import torch
-from torch.optim import Adam
+from torch.optim import Adam, LBFGS
 from .normalization_helper import NormalizationHelper
 from .pinn_models import RichardsPINN
 from .training_utils import (
@@ -34,15 +34,9 @@ def train_pinn_pool_batch_autoweight(
     weight_update_freq=100,
     weight_lr=0.5,
     use_initial_scales=True,
-    cache_size=5000,
     batch_size=500,
-    resample_freq=100,
     boundary_ratio=0.7,
-    high_residual_ratio=0.6,
-    temperature=1.0,
     batch_size_bc=100,
-    ic_profile=None,  # ← Add measured IC profile parameter
-    ic_type='obs',  # ← IC type: 'obs', 'linear', or 'hydrostatic'
     device='cpu',
     # Gradient-based boundary sampling parameters (three-way sampling)
     interp_ratio=0.80,           # Fraction from gradient-interpolated points
@@ -55,6 +49,13 @@ def train_pinn_pool_batch_autoweight(
     use_multi_gpu=True,  # Auto-detect and use DataParallel if multiple GPUs available
     use_amp=False,  # Mixed precision training (fp16) - reduces memory, may affect numerics
     grad_accumulation_steps=1,  # Gradient accumulation for larger effective batch size
+    # L-BFGS optimizer switching
+    switch_to_lbfgs_epoch=None,  # Switch from Adam to L-BFGS at this epoch (None = no switch)
+    lbfgs_lr=1.0,  # L-BFGS learning rate
+    lbfgs_max_iter=20,  # Max iterations per L-BFGS step
+    lbfgs_history_size=50,  # History size for Hessian approximation
+    lbfgs_tolerance_grad=1e-7,  # Gradient tolerance
+    lbfgs_tolerance_change=1e-9,  # Parameter change tolerance
     # Checkpointing for HPC fault tolerance
     checkpoint_dir='checkpoints',  # Directory to save checkpoints
     checkpoint_freq=None,  # Save checkpoint every N epochs (None = no checkpointing)
@@ -62,7 +63,8 @@ def train_pinn_pool_batch_autoweight(
     keep_last_n_checkpoints=3,  # Keep only last N checkpoints (None = keep all)
 ):
     """
-    Training with pool + small batch sampling approach using moisture BC.
+    Training with direct batch sampling using moisture BC.
+    GPU-optimized with large batch sizes for maximum parallelism.
     """
 
     # Validate moisture BC data
@@ -98,8 +100,6 @@ def train_pinn_pool_batch_autoweight(
         zb_initial=zb_initial,
         t_max=t_max,  # ← Add t_max
         z_max_tilde=1.0,  # ← Optional, for network scaling
-        ic_profile=ic_profile,  # ← Add measured IC profile
-        ic_type=ic_type,  # ← Add IC type
         device=device,  # ← Add device parameter
     ).to(device)
 
@@ -211,12 +211,7 @@ def train_pinn_pool_batch_autoweight(
     if grad_accumulation_steps > 1:
         print(f"Gradient Accumulation: {grad_accumulation_steps} steps")
     print(f"Adaptive weighting: updating every {weight_update_freq} epochs")
-    print(
-        f"Direct Sampling: batch_size={batch_size} (no cache, no adaptive residuals)"
-    )
-    print(
-        f"Boundary ratio: {boundary_ratio:.1%}"
-    )
+    print(f"PDE batch size: {batch_size} | Boundary ratio: {boundary_ratio:.1%}")
     print(
         f"Time domain from theta0: t∈[{t_min:.3f}, {t_max:.3f}], "
         f"z adaptive in [-z_b(t), 0]"
@@ -236,9 +231,36 @@ def train_pinn_pool_batch_autoweight(
         weights = weight_manager.get_weights()
 
     # --- Main training loop (GPU-optimized) ---
+    current_optimizer_type = 'adam'  # Track current optimizer
+
     for epoch in range(start_epoch, n_epochs):
-        # Gradient accumulation: only zero grad at start of accumulation cycle
-        if epoch % grad_accumulation_steps == 0:
+        # Check if we should switch to L-BFGS
+        if switch_to_lbfgs_epoch is not None and epoch == switch_to_lbfgs_epoch and current_optimizer_type == 'adam':
+            print(f"\n{'='*60}")
+            print(f"SWITCHING TO L-BFGS OPTIMIZER AT EPOCH {epoch}")
+            print(f"{'='*60}")
+            print(f"L-BFGS config:")
+            print(f"  lr: {lbfgs_lr}")
+            print(f"  max_iter: {lbfgs_max_iter}")
+            print(f"  history_size: {lbfgs_history_size}")
+            print(f"  tolerance_grad: {lbfgs_tolerance_grad}")
+            print(f"  tolerance_change: {lbfgs_tolerance_change}")
+
+            # Create L-BFGS optimizer
+            optimizer = LBFGS(
+                model.parameters(),
+                lr=lbfgs_lr,
+                max_iter=lbfgs_max_iter,
+                history_size=lbfgs_history_size,
+                tolerance_grad=lbfgs_tolerance_grad,
+                tolerance_change=lbfgs_tolerance_change,
+                line_search_fn='strong_wolfe'
+            )
+            current_optimizer_type = 'lbfgs'
+            print(f"{'='*60}\n")
+
+        # Gradient accumulation: only zero grad at start of accumulation cycle (Adam only)
+        if current_optimizer_type == 'adam' and epoch % grad_accumulation_steps == 0:
             optimizer.zero_grad()
 
         # Sample training points directly (no cache, no adaptive residuals)
@@ -264,52 +286,93 @@ def train_pinn_pool_batch_autoweight(
             model_core, batch_size, t_min, z_max, device
         )
 
-        # Compute losses with optional mixed precision
-        if use_amp:
-            with torch.cuda.amp.autocast():
-                losses = compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic)
-        else:
+        # --- L-BFGS requires closure function, Adam does standard step ---
+        if current_optimizer_type == 'lbfgs':
+            # L-BFGS closure function
+            def closure():
+                optimizer.zero_grad()
+                # Resample points for each closure evaluation
+                z_col_c, t_col_c = sampling.sample_pde_points_direct(
+                    model_core, batch_size, t_max, device, boundary_ratio=boundary_ratio
+                )
+                t_bc_c, _ = gradient_based_sampling(
+                    bc_times_t, bc_values_t, batch_size_bc, device=device,
+                    use_interpolation=True, interp_ratio=interp_ratio,
+                    neighbor_ratio=neighbor_ratio, baseline_ratio=baseline_ratio,
+                    neighbor_expansion=gradient_neighbor_expansion,
+                    gradient_threshold=gradient_threshold, power=gradient_power
+                )
+                z_ic_c, t_ic_c = sampling.sample_initial_condition_points(
+                    model_core, batch_size, t_min, z_max, device
+                )
+
+                losses_c = compute_losses(model, z_col_c, t_col_c, t_bc_c, z_ic_c, t_ic_c)
+                weights_c = weight_manager.get_weights()
+
+                if weight_manager.is_using_fixed_weights():
+                    _, _, loss_c = apply_weights_fixed_mode(losses_c, weights_c)
+                else:
+                    _, _, loss_c = apply_weights_and_compute_gradients(losses_c, weights_c, model)
+
+                loss_c.backward()
+                return loss_c
+
+            # L-BFGS step with closure
+            total_loss_value = optimizer.step(closure)
+
+            # Compute losses for logging (using original samples)
             losses = compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic)
-
-        # Apply weights and compute gradients (conditionally)
-        weights = weight_manager.get_weights()
-        if weight_manager.is_using_fixed_weights():
-            # Use lightweight computation for fixed weights
+            weights = weight_manager.get_weights()
             weighted_losses, gradients, total_loss = apply_weights_fixed_mode(losses, weights)
-        else:
-            # Use full gradient computation for adaptive weights
-            weighted_losses, gradients, total_loss = apply_weights_and_compute_gradients(
-                losses, weights, model
-            )
+            gradients["total"] = 0.0  # L-BFGS manages gradients internally
 
-        # Scale loss for gradient accumulation
-        total_loss = total_loss / grad_accumulation_steps
-
-        # Backpropagation with optional mixed precision
-        if use_amp:
-            scaler.scale(total_loss).backward()
-        else:
-            total_loss.backward()
-
-        # Optimizer step (only at end of accumulation cycle)
-        if (epoch + 1) % grad_accumulation_steps == 0:
-            # Compute total gradient norm (only if not using fixed weights)
-            if not weight_manager.is_using_fixed_weights():
-                total_grad_norm = compute_total_grad_norm(model)
-                gradients["total"] = total_grad_norm
-            else:
-                # Skip expensive gradient norm computation in fixed weight mode
-                gradients["total"] = 0.0
-
-            # Optimizer step with optional gradient scaling
+        else:  # Adam optimizer
+            # Compute losses with optional mixed precision
             if use_amp:
-                scaler.step(optimizer)
-                scaler.update()
+                with torch.cuda.amp.autocast():
+                    losses = compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic)
             else:
-                optimizer.step()
-        else:
-            # Not at accumulation boundary, set dummy gradient norm
-            gradients["total"] = 0.0
+                losses = compute_losses(model, z_col, t_col, t_bc, z_ic, t_ic)
+
+            # Apply weights and compute gradients (conditionally)
+            weights = weight_manager.get_weights()
+            if weight_manager.is_using_fixed_weights():
+                # Use lightweight computation for fixed weights
+                weighted_losses, gradients, total_loss = apply_weights_fixed_mode(losses, weights)
+            else:
+                # Use full gradient computation for adaptive weights
+                weighted_losses, gradients, total_loss = apply_weights_and_compute_gradients(
+                    losses, weights, model
+                )
+
+            # Scale loss for gradient accumulation
+            total_loss = total_loss / grad_accumulation_steps
+
+            # Backpropagation with optional mixed precision
+            if use_amp:
+                scaler.scale(total_loss).backward()
+            else:
+                total_loss.backward()
+
+            # Optimizer step (only at end of accumulation cycle)
+            if (epoch + 1) % grad_accumulation_steps == 0:
+                # Compute total gradient norm (only if not using fixed weights)
+                if not weight_manager.is_using_fixed_weights():
+                    total_grad_norm = compute_total_grad_norm(model)
+                    gradients["total"] = total_grad_norm
+                else:
+                    # Skip expensive gradient norm computation in fixed weight mode
+                    gradients["total"] = 0.0
+
+                # Optimizer step with optional gradient scaling
+                if use_amp:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+            else:
+                # Not at accumulation boundary, set dummy gradient norm
+                gradients["total"] = 0.0
 
         # Update weights periodically
         if (epoch + 1) % weight_update_freq == 0 and epoch > 0:
@@ -379,14 +442,14 @@ def train_pinn_pool_batch_autoweight(
         # Print progress
         if (epoch + 1) % 200 == 0 or epoch == 0:
             logger.print_progress(
-                epoch, n_epochs, total_loss, weighted_losses, gradients, weights, cache_manager=None
+                epoch, n_epochs, total_loss, weighted_losses, gradients, weights
             )
 
         # Compute and record sample loss (over full dataset) every 500 epochs
         if (epoch + 1) % 500 == 0 or epoch == 0:
             sample_losses_dict = compute_full_sample_loss(
-                model_core, None, bc_times_t, t_min, z_max, device,
-                t_max=t_max, boundary_ratio=boundary_ratio, sample_size=5000
+                model_core, bc_times_t, t_min, z_max, device, t_max,
+                boundary_ratio=boundary_ratio, sample_size=5000
             )
             logger.record_sample_losses(epoch, sample_losses_dict, weights)
 
@@ -400,7 +463,7 @@ def train_pinn_pool_batch_autoweight(
 
     # Print final summary
     final_grad_norm = gradients.get("total", 0.0)
-    logger.print_final_summary(final_grad_norm, weights, cache_manager=None)
+    logger.print_final_summary(final_grad_norm, weights)
 
     # Save final checkpoint (minimal version without training history)
     if checkpoint_freq is not None:
@@ -419,7 +482,6 @@ def train_pinn_pool_batch_autoweight(
                 'n_epochs': n_epochs,
                 'learning_rate': learning_rate,
                 'batch_size': batch_size,
-                'cache_size': cache_size,
             },
             # Normalization parameters (critical for fine-tuning)
             'normalization_params': {
@@ -513,16 +575,9 @@ def finetune_pinn(
     n_epochs=10000,
     learning_rate=1e-4,
     # Training parameters (same as base training)
-    cache_size=5000,
     batch_size=500,
-    resample_freq=100,
     boundary_ratio=0.7,
-    high_residual_ratio=0.6,
-    temperature=1.0,
     batch_size_bc=100,
-    # Initial condition parameters
-    ic_profile=None,  # Measured IC profile parameter
-    ic_type='obs',    # IC type: 'obs', 'linear', or 'hydrostatic'
     # Gradient-based boundary sampling parameters
     interp_ratio=0.80,
     neighbor_ratio=0.05,
@@ -559,10 +614,6 @@ def finetune_pinn(
 
         n_epochs: Number of fine-tuning epochs (default: 10k, much less than training)
         learning_rate: Learning rate (default: 1e-4, lower than training)
-
-        ic_profile: Initial condition profile (dict with 'depths' and 'theta' keys)
-                   If None, uses hydrostatic profile
-        ic_type: Type of IC ('obs', 'linear', or 'hydrostatic')
 
         checkpoint_dir: Directory for fine-tuning checkpoints (isolated from base)
         checkpoint_freq: Save checkpoint every N epochs
@@ -686,8 +737,6 @@ def finetune_pinn(
         t_max=new_t_max,  # Use NEW data's t_max (doesn't affect network scaling anymore)
         z_max_tilde=z_max_tilde,  # Preserve from base
         t_ref_days=t_ref_days,  # FIXED reference time from base model
-        ic_profile=ic_profile,  # NEW initial condition profile
-        ic_type=ic_type,        # IC type for fine-tuning
         device=device,
     ).to(device)
 
@@ -909,14 +958,14 @@ def finetune_pinn(
         # Print progress
         if (epoch + 1) % 200 == 0 or epoch == 0:
             logger.print_progress(
-                epoch, n_epochs, total_loss, weighted_losses, gradients, weights, cache_manager=None
+                epoch, n_epochs, total_loss, weighted_losses, gradients, weights
             )
 
         # Compute and record sample loss every 500 epochs
         if (epoch + 1) % 500 == 0 or epoch == 0:
             sample_losses_dict = compute_full_sample_loss(
-                model_core, None, theta0_times_t, t_min, 0.0, device,
-                t_max=t_max, boundary_ratio=boundary_ratio, sample_size=5000
+                model_core, theta0_times_t, t_min, 0.0, device, t_max,
+                boundary_ratio=boundary_ratio, sample_size=5000
             )
             logger.record_sample_losses(epoch, sample_losses_dict, weights)
 
@@ -928,7 +977,7 @@ def finetune_pinn(
 
     # Print final summary
     final_grad_norm = gradients.get("total", 0.0)
-    logger.print_final_summary(final_grad_norm, weights, cache_manager=None)
+    logger.print_final_summary(final_grad_norm, weights)
 
     # Save final checkpoint
     if checkpoint_freq is not None:
@@ -947,7 +996,6 @@ def finetune_pinn(
                 'n_epochs': n_epochs,
                 'learning_rate': learning_rate,
                 'batch_size': batch_size,
-                'cache_size': cache_size,
             },
             'normalization_params': {
                 'soil_params': soil_params,
@@ -1042,8 +1090,6 @@ def train_pinn(dataset, device='auto', checkpoint_dir=None, checkpoint_path=None
         soil_params=dataset.soil_params,
         theta0_data=dataset.get_bc_data(),
         et_data=dataset.get_et_data(),  # ← ET data (None if not in config)
-        ic_profile=dataset.ic_profile,
-        ic_type=dataset.ic_type,
 
         # Physics parameters
         Sy=dataset.Sy,
@@ -1060,13 +1106,9 @@ def train_pinn(dataset, device='auto', checkpoint_dir=None, checkpoint_path=None
         n_epochs=dataset.n_epochs,
         learning_rate=dataset.learning_rate,
 
-        # Cache pool & batch sampling
-        cache_size=dataset.cache_size,
+        # Batch sampling
         batch_size=dataset.batch_size,
-        resample_freq=dataset.resample_freq,
         boundary_ratio=dataset.boundary_ratio,
-        high_residual_ratio=dataset.high_residual_ratio,
-        temperature=dataset.temperature,
 
         # Boundary condition sampling
         batch_size_bc=dataset.batch_size_bc,
@@ -1084,6 +1126,14 @@ def train_pinn(dataset, device='auto', checkpoint_dir=None, checkpoint_path=None
         use_amp=dataset.use_amp,
         use_multi_gpu=dataset.use_multi_gpu,
         grad_accumulation_steps=dataset.grad_accumulation_steps,
+
+        # L-BFGS optimizer switching
+        switch_to_lbfgs_epoch=dataset.switch_to_lbfgs_epoch,
+        lbfgs_lr=dataset.lbfgs_lr,
+        lbfgs_max_iter=dataset.lbfgs_max_iter,
+        lbfgs_history_size=dataset.lbfgs_history_size,
+        lbfgs_tolerance_grad=dataset.lbfgs_tolerance_grad,
+        lbfgs_tolerance_change=dataset.lbfgs_tolerance_change,
 
         # Checkpointing
         checkpoint_dir=checkpoint_dir,
@@ -1149,9 +1199,7 @@ def finetune_pinn_with_dataset(base_checkpoint_path, new_dataset, device='auto',
         learning_rate=new_dataset.learning_rate,
 
         # Sampling parameters
-        cache_size=new_dataset.cache_size,
         batch_size=new_dataset.batch_size,
-        resample_freq=new_dataset.resample_freq,
         boundary_ratio=new_dataset.boundary_ratio,
 
         # Gradient-based boundary sampling
@@ -1169,8 +1217,6 @@ def finetune_pinn_with_dataset(base_checkpoint_path, new_dataset, device='auto',
         use_initial_scales=new_dataset.use_initial_scales,
 
         # Initial condition
-        ic_profile=new_dataset.ic_profile,
-        ic_type=new_dataset.ic_type,
 
         # Device and GPU settings
         device=device,

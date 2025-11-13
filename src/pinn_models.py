@@ -116,8 +116,6 @@ class RichardsPINN(nn.Module):
         t_max=86400,
         z_max_tilde=1.0,
         t_ref_days=15.0,
-        ic_profile=None,
-        ic_type='obs',
         device='cpu'
     ):
         """
@@ -135,13 +133,6 @@ class RichardsPINN(nn.Module):
             t_max: Maximum time (dimensional) [s]
             z_max_tilde: Max dimensionless depth for network scaling
             t_ref_days: Fixed reference time in days (default: 15 days)
-            ic_profile: Optional dict with 'depths' and 'theta' for measured IC profile
-                       {'depths': [0.02, 0.15, 0.30, ...], 'theta': [0.3, 0.28, ...]}
-                       Depths in meters (positive, below surface), theta in m³/m³
-            ic_type: Type of initial condition:
-                    'obs' - Use measured profile with linear extrapolation to water table
-                    'linear' - Linear from surface h_obs to water table h=0
-                    'hydrostatic' - Hydrostatic profile (h = -zb - z)
             device: Device for computation
         """
         super().__init__()
@@ -201,31 +192,6 @@ class RichardsPINN(nn.Module):
             # Fallback to constant S_max from normalizer
             self.S_max_tilde = normalizer.S_max_tilde
             self.use_et_data = False
-
-        # Store IC type
-        self.ic_type = ic_type
-
-        # Store measured IC profile if provided
-        self.ic_profile = None
-        if ic_profile is not None:
-            # Convert depths to z-coordinates (negative, z=0 at surface)
-            depths = torch.tensor(ic_profile['depths'], dtype=torch.float32, device=device)
-            z_ic = -depths  # Convert positive depth to negative z
-            theta_ic = torch.tensor(ic_profile['theta'], dtype=torch.float32, device=device)
-
-            # Convert theta to effective saturation
-            Se_ic = (theta_ic - normalizer.theta_r) / normalizer.theta_star
-            Se_ic = torch.clamp(Se_ic, 1e-6, 1.0 - 1e-6)
-
-            # Convert Se to pressure head using van Genuchten inversion
-            m = 1.0 - 1.0 / normalizer.n
-            inv_term = torch.pow(Se_ic, -1.0 / m) - 1.0
-            h_ic = -torch.pow(torch.clamp(inv_term, min=0.0), 1.0 / normalizer.n) / normalizer.alpha
-
-            self.ic_profile = {
-                'z': z_ic,  # Dimensional z-coordinates [m]
-                'h': h_ic   # Dimensional pressure head [m]
-            }
 
     def forward(self, z_tilde, t_tilde):
         """
@@ -433,40 +399,20 @@ class RichardsPINN(nn.Module):
         
         return dzb_dt_tilde - q_wt_tilde / self.Sy_tilde
 
-    def _torch_interp_1d(self, x, xp, fp):
-        """
-        GPU-optimized 1D linear interpolation (replacement for np.interp)
-
-        Args:
-            x: Query points (1D tensor)
-            xp: Data point x-coordinates (1D tensor, must be sorted)
-            fp: Data point y-coordinates (1D tensor, same length as xp)
-
-        Returns:
-            Interpolated values at query points x
-        """
-        # Handle edge cases: extrapolate with boundary values (like np.interp)
-        x_clamped = torch.clamp(x, xp[0], xp[-1])
-
-        # Use searchsorted for GPU-accelerated binary search
-        indices = torch.searchsorted(xp, x_clamped)
-        indices = torch.clamp(indices, 1, len(xp) - 1)
-
-        # Get surrounding points
-        x0 = xp[indices - 1]
-        x1 = xp[indices]
-        y0 = fp[indices - 1]
-        y1 = fp[indices]
-
-        # Linear interpolation: y = y0 + (x - x0) * (y1 - y0) / (x1 - x0)
-        alpha = (x_clamped - x0) / (x1 - x0 + 1e-12)
-        y_interp = y0 + alpha * (y1 - y0)
-
-        return y_interp
-
     def initial_conditions_residual(self, z, t0):
         """
-        Dimensionless initial conditions - uses measured profile if provided, else hydrostatic
+        Dimensionless IC residual using unified parabolic profile
+
+        The parabolic profile satisfies:
+        1. h(0) = h_surface (matches observed surface moisture at t=0)
+        2. h(-zb) = 0 (water table boundary condition)
+        3. dh/dz|_{z=-zb} = -1 (zero flux at water table → equilibrium)
+
+        Profile: h(z) = a*z² + b*z + c where:
+            a = (zb + h_surface) / zb²
+            b = (zb + 2*h_surface) / zb
+            c = h_surface
+
         GPU-OPTIMIZED: All operations stay on GPU (no NumPy/CPU transfers)
 
         Args:
@@ -483,63 +429,29 @@ class RichardsPINN(nn.Module):
         # Compute in dimensionless space
         h_tilde, zb_tilde = self(z_tilde, t0_tilde)
 
-        # Determine IC based on ic_type
-        if self.ic_type == 'obs' and self.ic_profile is not None:
-            # Option 1: Use measured profile with linear extrapolation to water table
-            # ✅ GPU-OPTIMIZED: All operations stay on GPU
-            z_measured = self.ic_profile['z']  # Already on GPU
-            h_measured = self.ic_profile['h']  # Already on GPU
+        # Get h_surface from observed surface moisture at t=0
+        Se_surf_0 = self.theta0_values_tilde[0]  # First observation (dimensionless)
 
-            # Get initial water table depth (dimensional) - stay on GPU
-            zb_ic_dim = self.normalizer.denormalize_zb(
-                torch.tensor(self.zb_initial_tilde, device=z.device)
-            )
+        # Invert van Genuchten: Se → h (dimensional)
+        m = 1.0 - 1.0 / self.normalizer.n
+        inv_term = torch.pow(Se_surf_0, -1.0 / m) - 1.0
+        h_surface = -torch.pow(torch.clamp(inv_term, min=0.0), 1.0 / self.normalizer.n) / self.normalizer.alpha
 
-            # Extend measured profile to water table
-            # Water table point: h(z=-zb) = 0
-            z_wt = -zb_ic_dim.view(-1)
-            h_wt = torch.zeros_like(z_wt)
+        # Get initial water table depth (dimensional)
+        zb_ic_dim = self.normalizer.denormalize_zb(
+            torch.tensor(self.zb_initial_tilde, device=z.device)
+        )
 
-            # Extended profile: measurements + water table point (GPU tensors)
-            z_extended = torch.cat([z_measured, z_wt])
-            h_extended = torch.cat([h_measured, h_wt])
+        # Parabolic profile coefficients: h(z) = a*z² + b*z + c
+        a = (zb_ic_dim + h_surface) / (zb_ic_dim * zb_ic_dim)
+        b = (zb_ic_dim + 2.0 * h_surface) / zb_ic_dim
+        c = h_surface
 
-            # Sort by z (most negative to least negative) - GPU operation
-            sort_idx = torch.argsort(z_extended)
-            z_extended_sorted = z_extended[sort_idx]
-            h_extended_sorted = h_extended[sort_idx]
+        # Compute IC profile (dimensional)
+        h_ic = a * z * z + b * z + c
 
-            # ✅ GPU-native linear interpolation (replacement for np.interp)
-            z_flat = z.flatten()
-            h_ic_interp = self._torch_interp_1d(z_flat, z_extended_sorted, h_extended_sorted)
-            h_ic = h_ic_interp.view_as(z)
-
-            # Normalize to dimensionless
-            h_ic_tilde = self.normalizer.normalize_h(h_ic)
-
-        elif self.ic_type == 'linear' and self.ic_profile is not None:
-            # Option 2: Linear from surface h_obs to water table h=0
-            # ✅ GPU-OPTIMIZED: All operations stay on GPU
-
-            # Get surface h value (shallowest measurement, z closest to 0)
-            h_surface = self.ic_profile['h'][self.ic_profile['z'].argmax()]
-
-            # Get initial water table depth (dimensional) - stay on GPU
-            zb_ic_dim = self.normalizer.denormalize_zb(
-                torch.tensor(self.zb_initial_tilde, device=z.device)
-            )
-
-            # Linear profile: h(z) = h_surface * (1 + z/zb_ic)
-            # At z=0: h = h_surface
-            # At z=-zb_ic: h = 0
-            h_ic = h_surface * (1.0 + z / zb_ic_dim)
-
-            # Normalize to dimensionless
-            h_ic_tilde = self.normalizer.normalize_h(h_ic)
-
-        else:
-            # Hydrostatic initial condition (dimensionless)
-            h_ic_tilde = (-zb_tilde - z_tilde)
+        # Normalize to dimensionless
+        h_ic_tilde = self.normalizer.normalize_h(h_ic)
 
         # Initial water table depth (dimensionless)
         zb_ic_tilde = torch.tensor(self.zb_initial_tilde, device=z_tilde.device).expand_as(zb_tilde)

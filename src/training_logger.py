@@ -117,7 +117,6 @@ class TrainingLogger:
             "total_loss", "pde_loss", "surf_loss", "wt_head_loss", "wt_kin_loss", "ic_h_loss", "ic_zb_loss",
             "pde_grad", "surf_grad", "wt_head_grad", "wt_kin_grad", "ic_h_grad", "ic_zb_grad", "total_grad",
             "pde_weight", "surf_weight", "wt_head_weight", "wt_kin_weight", "ic_h_weight", "ic_zb_weight",
-            "cache_mean_residual", "cache_max_residual", "cache_std_residual",
             "learning_rate", "epoch_time"
         ]
         
@@ -223,7 +222,7 @@ class TrainingLogger:
         self.training_metrics["learning_rates"].append(learning_rate)
 
     def log_epoch(self, epoch, total_loss, loss_dict, grad_dict, weights,
-                  cache_manager=None, learning_rate=None):
+                  learning_rate=None):
         """
         Log complete epoch information to file.
         GPU-OPTIMIZED: Batches all tensor conversions together.
@@ -241,17 +240,6 @@ class TrainingLogger:
         current_time = time.time()
         elapsed_time = current_time - self.start_time
         epoch_time = current_time - self.epoch_start_time if hasattr(self, 'epoch_start_time') else None
-
-        # Get cache stats
-        cache_mean = cache_max = cache_std = None
-        if cache_manager and hasattr(cache_manager, 'cache_stats'):
-            stats = cache_manager.cache_stats
-            if stats["mean_residual"]:
-                cache_mean = stats["mean_residual"][-1]
-            if stats["max_residual"]:
-                cache_max = stats["max_residual"][-1]
-            if stats["std_residual"]:
-                cache_std = stats["std_residual"][-1]
 
         # ✅ GPU-OPTIMIZED: Batch all tensor conversions
         total_loss_val = to_float(total_loss)
@@ -283,9 +271,6 @@ class TrainingLogger:
             "wt_kin_weight": weights["wt_kin"],
             "ic_h_weight": weights["ic_h"],
             "ic_zb_weight": weights["ic_zb"],
-            "cache_mean_residual": cache_mean,
-            "cache_max_residual": cache_max,
-            "cache_std_residual": cache_std,
             "learning_rate": learning_rate,
             "epoch_time": epoch_time
         }
@@ -363,7 +348,6 @@ class TrainingLogger:
         loss_dict,
         grad_dict,
         weights,
-        cache_manager=None,
     ):
         """
         Print training progress.
@@ -408,11 +392,7 @@ class TrainingLogger:
         for key in weights:
             print(f"    {key}: {weights[key]:.3e}")
 
-        # Print cache statistics if available
-        if cache_manager is not None:
-            cache_manager.print_stats(epoch)
-
-    def print_final_summary(self, total_grad_norm, weights, cache_manager=None):
+    def print_final_summary(self, total_grad_norm, weights):
         """
         Print final training summary.
         GPU-OPTIMIZED: Handles GPU tensors in total_grad_norm.
@@ -428,18 +408,3 @@ class TrainingLogger:
         print(f"Final weights:")
         for key in weights:
             print(f"  {key}: {weights[key]:.3e}")
-
-        if cache_manager is not None:
-            print(f"\nCache statistics:")
-            print(
-                f"  Total resamples: {len(cache_manager.cache_stats['resample_epochs'])}"
-            )
-            if cache_manager.cache_stats["mean_residual"]:
-                print(
-                    f"  Final mean residual: "
-                    f"{cache_manager.cache_stats['mean_residual'][-1]:.3e}"
-                )
-                print(
-                    f"  Final max residual: "
-                    f"{cache_manager.cache_stats['max_residual'][-1]:.3e}"
-                )

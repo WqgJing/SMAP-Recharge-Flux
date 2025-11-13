@@ -42,9 +42,9 @@ class PINNDataset:
         bc_values: np.ndarray - BC values (theta or flux)
         bc_type: str - 'dirichlet' (moisture) or 'neumann' (flux)
 
-        # Initial Condition (always required)
-        ic_profile: dict - {'depths': [z1, z2, ...], 'theta': [θ1, θ2, ...]}
-        ic_type: str - 'obs', 'linear', or 'hydrostatic'
+        # Initial Condition (computed automatically from first observation)
+        # Uses unified parabolic profile: h(z) = a*z² + b*z + c
+        # Satisfies: h(0)=h_surface, h(-zb)=0, dh/dz|_{z=-zb}=-1
 
         # Observations (optional - for validation)
         obs_times: np.ndarray - Time array for all observations
@@ -206,15 +206,9 @@ class PINNDataset:
                 ic_depths.append(depth_m)
                 ic_theta.append(theta_ic)
 
-        self.ic_profile = {
-            'depths': ic_depths,
-            'theta': ic_theta
-        }
-        self.ic_type = config.ic_type
-
         if self.verbose:
-            print(f"\n✓ Initial Condition Profile:")
-            print(f"  Type: {self.ic_type}")
+            print(f"\n✓ Initial Condition: Using parabolic profile")
+            print(f"  Surface moisture from first observation: θ₀ = {theta0_times.iloc[0]:.4f} m³/m³")
             print(f"  Measurement points: {len(ic_depths)}")
             for depth_m, theta_val in zip(ic_depths, ic_theta):
                 depth_cm = depth_m * 100
@@ -407,12 +401,8 @@ class PINNDataset:
         self.device = config.device
 
         # Sampling parameters
-        self.cache_size = config.cache_size
         self.batch_size = config.batch_size
-        self.resample_freq = config.resample_freq
         self.boundary_ratio = config.boundary_ratio
-        self.high_residual_ratio = config.high_residual_ratio
-        self.temperature = config.temperature
 
         # Boundary sampling parameters
         self.batch_size_bc = config.batch_size_bc
@@ -430,6 +420,14 @@ class PINNDataset:
         self.use_amp = config.use_amp
         self.use_multi_gpu = config.use_multi_gpu
         self.grad_accumulation_steps = config.grad_accumulation_steps
+
+        # L-BFGS optimizer switching
+        self.switch_to_lbfgs_epoch = config.switch_to_lbfgs_epoch
+        self.lbfgs_lr = config.lbfgs_lr
+        self.lbfgs_max_iter = config.lbfgs_max_iter
+        self.lbfgs_history_size = config.lbfgs_history_size
+        self.lbfgs_tolerance_grad = config.lbfgs_tolerance_grad
+        self.lbfgs_tolerance_change = config.lbfgs_tolerance_change
 
         # Checkpointing
         self.checkpoint_dir = config.checkpoint_dir
@@ -528,8 +526,8 @@ class PINNDataset:
         print(f"    Depths: {len(self.obs_depths)} → {self.obs_depths}")
         print(f"    Time points: {len(self.obs_times)}")
         print(f"\n  Initial Condition:")
-        print(f"    Type: {self.ic_type}")
-        print(f"    Profile points: {len(self.ic_profile['depths'])}")
+        print(f"    Type: Parabolic profile (unified)")
+        print(f"    Computed from surface observation at t=0")
         print(f"\n  Water Table Depth:")
         if self.has_wtd():
             print(f"    Available: Yes ({len(self.wtd_values)} points)")
