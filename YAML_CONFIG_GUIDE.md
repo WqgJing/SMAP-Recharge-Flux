@@ -97,11 +97,10 @@ network:
 # SAMPLING CONFIGURATION
 # ============================================================================
 sampling:
-  cache_size: 10000
+  batch_size: 500            # Points sampled per iteration
   batch_size: 500
-  resample_freq: 10000
+  boundary_ratio: 0.7        # Fraction near boundaries
   boundary_ratio: 0.7
-  high_residual_ratio: 0.6
   temperature: 0.3
 
 boundary_sampling:
@@ -450,11 +449,10 @@ network:
   zb_net: {hidden_dim: 32, num_layers: 3}
 
 sampling:
-  cache_size: 10000
+  batch_size: 500            # Points sampled per iteration
   batch_size: 500
-  resample_freq: 10000
+  boundary_ratio: 0.7        # Fraction near boundaries
   boundary_ratio: 0.7
-  high_residual_ratio: 0.6
   temperature: 0.3
 
 boundary_sampling:
@@ -536,11 +534,10 @@ network:
   zb_net: {hidden_dim: 64, num_layers: 4}
 
 sampling:
-  cache_size: 15000
+  batch_size: 500            # Points sampled per iteration
   batch_size: 800
-  resample_freq: 5000
+  boundary_ratio: 0.7        # Fraction near boundaries
   boundary_ratio: 0.8
-  high_residual_ratio: 0.7
   temperature: 0.2
 
 boundary_sampling:
@@ -595,7 +592,7 @@ network:
   zb_net: {hidden_dim: 16, num_layers: 2}
 
 sampling:
-  cache_size: 5000     # Smaller cache
+  batch_size: 500            # Points sampled per iteration
   batch_size: 300
 
 checkpointing:
@@ -617,9 +614,9 @@ network:
   zb_net: {hidden_dim: 64, num_layers: 4}
 
 sampling:
-  cache_size: 20000    # Large cache
+  batch_size: 500            # Points sampled per iteration
   batch_size: 1000
-  resample_freq: 2000  # Frequent resampling
+  boundary_ratio: 0.7        # Fraction near boundaries
 
 optimization:
   use_amp: true        # Mixed precision for speed
@@ -702,7 +699,7 @@ training:
 2. **Reduce cache/batch size:**
 ```yaml
 sampling:
-  cache_size: 5000   # Instead of 20000
+  batch_size: 500            # Points sampled per iteration
   batch_size: 300    # Instead of 1000
 ```
 

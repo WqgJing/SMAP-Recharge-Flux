@@ -175,12 +175,8 @@ with open(summary_path, 'w') as f:
 
     f.write("Sampling Configuration:\n")
     f.write(f"  PDE collocation:\n")
-    f.write(f"    cache_size: {dataset.cache_size}\n")
     f.write(f"    batch_size: {dataset.batch_size}\n")
-    f.write(f"    resample_freq: {dataset.resample_freq}\n")
     f.write(f"    boundary_ratio: {dataset.boundary_ratio}\n")
-    f.write(f"    high_residual_ratio: {dataset.high_residual_ratio}\n")
-    f.write(f"    temperature: {dataset.temperature}\n")
     f.write(f"  Boundary condition:\n")
     f.write(f"    batch_size_bc: {dataset.config.batch_size_bc}\n")
     f.write(f"    interp_ratio: {dataset.config.interp_ratio}\n")

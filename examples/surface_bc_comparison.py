@@ -130,8 +130,7 @@ training_config = {
     'learning_rate': 1e-3,
     'batch_size': 500,
     'batch_size_bc': 250,
-    'cache_size': 5000,
-    'resample_freq': 100,
+    'boundary_ratio': 0.7,       # Fraction of points near boundaries
     'weight_update_freq': 100,
     'checkpoint_freq': 1000,
     'device': 'cuda' if torch.cuda.is_available() else 'cpu'

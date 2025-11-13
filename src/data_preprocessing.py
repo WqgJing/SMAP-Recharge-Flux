@@ -27,7 +27,7 @@ def preprocess_soil_data(config, output_path='data/preprocessed_soil_data.pkl'):
         - theta_2cm, theta_15cm, ..., theta_80cm: Full depth data
         - times_seconds: Time array
         - datetime_col: Datetime array
-        - ic_profile: Initial condition profile
+        - ic_profile: (Legacy - for reference only, not used by model)
         - config_file: Config path used
         - date_range: Date range string
     """
@@ -121,6 +121,8 @@ def preprocess_soil_data(config, output_path='data/preprocessed_soil_data.pkl'):
                 ic_depths.append(depth_m)
                 ic_theta.append(theta_ic)
 
+    # Note: IC profile is for reference only
+    # The model now uses automatic parabolic IC from surface obs at t=0
     ic_profile = {
         'depths': ic_depths,
         'theta': ic_theta

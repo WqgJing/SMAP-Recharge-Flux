@@ -288,7 +288,7 @@ class WeightManager:
             w_new = math.exp(log_w_new)
             # clamp absolute bounds
             self.weights[k] = float(min(self.max_w, max(self.min_w, w_new)))
-    
+
     def is_using_fixed_weights(self):
         """Check if using fixed weights mode."""
         return self.use_fixed_weights
@@ -306,206 +306,6 @@ class WeightManager:
             g = self.grad_ema[k]
             gtxt = f"{g:.3e}" if (g is not None) else "nan"
             print(f"  {k}: {self.weights[k]:.3e} (grad_unw_ema: {gtxt})")
-
-
-class CachePoolManager:
-    """Manages cache pool for adaptive sampling in PINN training."""
-
-    def __init__(
-        self,
-        cache_size,
-        batch_size,
-        device,
-        q0_times_t,
-        t_max,
-        boundary_ratio=0.7,
-        high_residual_ratio=0.6,
-        temperature=1.0,
-    ):
-        self.cache_size = cache_size
-        self.batch_size = batch_size
-        self.device = device
-        self.q0_times_t = q0_times_t
-        self.t_max = t_max
-        self.boundary_ratio = boundary_ratio
-        self.high_residual_ratio = high_residual_ratio
-        self.temperature = temperature
-
-        # Initialize cache pool
-        self.u_cache, self.t_cache = self._generate_cache_pool(cache_size)
-        self.cache_residuals = torch.zeros(cache_size, device=device)
-        self.sampling_probs = None
-
-        # Cache statistics tracking
-        self.cache_stats = {
-            "resample_epochs": [],
-            "mean_residual": [],
-            "max_residual": [],
-            "std_residual": [],
-        }
-
-    def _generate_cache_pool(self, size):
-        """Generate cache pool with mixed temporal and normalized spatial sampling."""
-        # Time sampling: half from q0_times, half random uniform
-        n_q0_sample = min(size // 2, len(self.q0_times_t))
-        q0_indices = torch.randint(
-            0, len(self.q0_times_t), (n_q0_sample,), device=self.device
-        )
-        t_from_q0 = self.q0_times_t[q0_indices].flatten()
-        n_random = size - n_q0_sample
-        t_random = torch.rand(n_random, device=self.device) * self.t_max
-        t_cache = torch.cat([t_from_q0, t_random]).reshape(-1, 1)
-
-        # Normalized spatial sampling: u ∈ [0,1] where 0=surface, 1=water table
-        n_boundary = int(size * self.boundary_ratio)
-        n_interior = size - n_boundary
-
-        # Split boundary points between surface and bottom
-        n_surface = n_boundary // 2
-        n_bottom = n_boundary - n_surface
-
-        # Surface region: Beta(1,3) to concentrate near u=0 (sample directly on GPU)
-        u_surface = torch.distributions.Beta(
-            torch.tensor(1.0, device=self.device),
-            torch.tensor(3.0, device=self.device)
-        ).sample((n_surface,))
-
-        # Bottom region: Beta(3,1) to concentrate near u=1 (sample directly on GPU)
-        u_bottom = torch.distributions.Beta(
-            torch.tensor(3.0, device=self.device),
-            torch.tensor(1.0, device=self.device)
-        ).sample((n_bottom,))
-
-        # Interior points: uniform distribution
-        u_interior = torch.rand(n_interior, device=self.device)
-
-        # Combine all normalized spatial points
-        u_cache = torch.cat([u_surface, u_bottom, u_interior]).reshape(-1, 1)
-
-        # Shuffle paired u/t together
-        perm = torch.randperm(size, device=self.device)
-        return u_cache[perm], t_cache[perm]
-
-    def update_residuals(self, model, epoch, resample_freq):
-        """
-        Update cache residuals and sampling probabilities.
-        GPU-OPTIMIZED: Defers statistics sync to single batched operation.
-        """
-        if epoch % resample_freq != 0:
-            return
-
-        model.eval()
-
-        # Evaluate residuals over cache in chunks
-        residual_vals = []
-        chunk_size = 500
-
-        for i in range(0, self.cache_size, chunk_size):
-            j = min(i + chunk_size, self.cache_size)
-            u_chunk = self.u_cache[i:j].clone()
-            t_chunk = self.t_cache[i:j].clone().requires_grad_(True)
-
-            # Map u to z using predicted water table depth
-            with torch.no_grad():
-                zb_chunk = model.predict_water_table(t_chunk)
-            z_chunk = (-u_chunk * zb_chunk).requires_grad_(True)
-
-            res = model.pde_residual(z_chunk, t_chunk)
-            residual_vals.append(res.detach().abs().squeeze())
-
-        self.cache_residuals[:] = torch.cat(residual_vals)
-
-        # ✅ GPU-OPTIMIZED: Compute all stats on GPU first, then single sync
-        cache_mean_gpu = self.cache_residuals.mean()
-        cache_max_gpu = self.cache_residuals.max()
-        cache_std_gpu = self.cache_residuals.std()
-
-        # Track statistics (single batched CPU sync)
-        self.cache_stats["resample_epochs"].append(epoch)
-        self.cache_stats["mean_residual"].append(cache_mean_gpu.item())
-        self.cache_stats["max_residual"].append(cache_max_gpu.item())
-        self.cache_stats["std_residual"].append(cache_std_gpu.item())
-
-        # Compute sampling probabilities with safety checks
-        tau = self.temperature if self.temperature > 0 else 1.0
-
-        # Check for invalid residuals
-        if torch.isnan(self.cache_residuals).any() or torch.isinf(self.cache_residuals).any():
-            print(f"Warning: Invalid residuals detected at epoch {epoch}, using uniform probabilities")
-            self.sampling_probs = torch.ones(self.cache_size, device=self.device) / self.cache_size
-        elif self.cache_residuals.abs().max() < 1e-12:
-            # All residuals are essentially zero - use uniform sampling
-            self.sampling_probs = torch.ones(self.cache_size, device=self.device) / self.cache_size
-        else:
-            # Clamp residuals to prevent overflow in softmax
-            residuals_clamped = torch.clamp(self.cache_residuals, min=0.0, max=1e10)
-            scaled_residuals = residuals_clamped / (tau + 1e-12)
-            self.sampling_probs = torch.softmax(scaled_residuals, dim=0)
-
-            # Final safety check
-            if torch.isnan(self.sampling_probs).any() or torch.isinf(self.sampling_probs).any():
-                print(f"Warning: Invalid probabilities after softmax at epoch {epoch}, using uniform")
-                self.sampling_probs = torch.ones(self.cache_size, device=self.device) / self.cache_size
-        
-        # Optionally refresh part of the cache pool
-        if epoch > 0 and epoch % (resample_freq * 5) == 0:
-            refresh_size = self.cache_size // 10
-            refresh_idx = torch.randperm(self.cache_size, device=self.device)[
-                :refresh_size
-            ]
-            u_new, t_new = self._generate_cache_pool(refresh_size)
-            self.u_cache[refresh_idx] = u_new
-            self.t_cache[refresh_idx] = t_new
-
-        model.train()
-
-    def sample_batch(self, model, epoch):
-        """Sample batch from cache based on PDE residuals."""
-        # Sample batch indices
-        if self.sampling_probs is None or epoch == 0:
-            # Initial warm-up: random sampling
-            batch_idx = torch.randint(
-                0, self.cache_size, (self.batch_size,), device=self.device
-            )
-        else:
-            # Split batch: high-residual points + random points
-            n_high = int(self.batch_size * self.high_residual_ratio)
-            n_rand = self.batch_size - n_high
-
-            # Sample high-residual points
-            if n_high > 0:
-                high_idx = torch.multinomial(
-                    self.sampling_probs, n_high, replacement=(n_high > self.cache_size)
-                )
-            else:
-                high_idx = torch.tensor([], dtype=torch.long, device=self.device)
-
-            # Sample random points
-            rand_idx = torch.randint(0, self.cache_size, (n_rand,), device=self.device)
-
-            # Combine indices
-            batch_idx = torch.cat([high_idx, rand_idx])
-
-        # Get batch points from cache
-        u_batch = self.u_cache[batch_idx].clone()
-        t_batch = self.t_cache[batch_idx].clone().requires_grad_(True)
-
-        # Map u to z using predicted water table depth
-        zb_batch = model.predict_water_table(t_batch)
-        z_batch = (-u_batch * zb_batch).requires_grad_(True)
-
-        return z_batch, t_batch
-
-    def print_stats(self, epoch):
-        """Print cache statistics if available."""
-        if (
-            self.cache_stats["resample_epochs"]
-            and self.cache_stats["resample_epochs"][-1] == epoch
-        ):
-            print(f"  Cache stats (epoch {epoch}):")
-            print(f"    Mean residual: {self.cache_stats['mean_residual'][-1]:.3e}")
-            print(f"    Max residual: {self.cache_stats['max_residual'][-1]:.3e}")
-            print(f"    Std residual: {self.cache_stats['std_residual'][-1]:.3e}")
 
 
 # Gradient computation utilities
@@ -564,8 +364,8 @@ def compute_total_grad_norm(model):
     return total_norm_squared.sqrt()
 
 
-def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, device,
-                              batch_size_bc=100, chunk_size=1000, t_max=None,
+def compute_full_sample_loss(model, q0_times_t, t_min, z_max, device, t_max,
+                              batch_size_bc=100, chunk_size=1000,
                               boundary_ratio=0.7, sample_size=5000):
     """
     Compute loss over all samples (entire dataset) for smooth loss tracking.
@@ -573,16 +373,15 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
 
     Args:
         model: The PINN model
-        cache_manager: Cache pool manager containing all spatial-temporal points (optional, can be None)
         q0_times_t: Boundary condition time points
         t_min: Minimum time for initial conditions
         z_max: Maximum z (surface) for initial conditions
         device: Device to use
+        t_max: Maximum time
         batch_size_bc: Batch size for boundary condition points
         chunk_size: Chunk size for processing large datasets
-        t_max: Maximum time (required if cache_manager is None)
-        boundary_ratio: Boundary sampling ratio (used if cache_manager is None)
-        sample_size: Number of samples to generate (used if cache_manager is None)
+        boundary_ratio: Boundary sampling ratio
+        sample_size: Number of samples to generate
 
     Returns:
         Dictionary containing total loss and loss components computed over full dataset
@@ -599,72 +398,46 @@ def compute_full_sample_loss(model, cache_manager, q0_times_t, t_min, z_max, dev
         "ic_zb": torch.tensor(0.0, device=device),
     }
 
-    # 1. Compute PDE loss over points
+    # 1. Compute PDE loss over sampled points using direct sampling
     n_pde_points = 0
 
-    if cache_manager is not None:
-        # Use cache pool if available
-        for i in range(0, cache_manager.cache_size, chunk_size):
-            j = min(i + chunk_size, cache_manager.cache_size)
-            u_chunk = cache_manager.u_cache[i:j].clone()
-            t_chunk = cache_manager.t_cache[i:j].clone()
+    for i in range(0, sample_size, chunk_size):
+        chunk_batch_size = min(chunk_size, sample_size - i)
 
-            # Map u to z using predicted water table depth
-            zb_chunk = model.predict_water_table(t_chunk)
+        # Sample time uniformly
+        t_chunk = torch.rand(chunk_batch_size, 1, device=device) * t_max
 
-            # Create z_chunk and enable gradients for PDE residual computation
-            z_chunk = (-u_chunk * zb_chunk).detach().requires_grad_(True)
-            t_chunk_grad = t_chunk.detach().requires_grad_(True)
+        # Sample normalized depth u ∈ [0,1]
+        n_boundary = int(chunk_batch_size * boundary_ratio)
+        n_interior = chunk_batch_size - n_boundary
+        n_surface = n_boundary // 2
+        n_bottom = n_boundary - n_surface
 
-            # Compute PDE residual (needs gradients enabled for physics derivatives)
-            res_pde = model.pde_residual(z_chunk, t_chunk_grad)
+        # Sample directly on GPU (avoid CPU→GPU transfer)
+        u_surface = torch.distributions.Beta(
+            torch.tensor(1.0, device=device),
+            torch.tensor(3.0, device=device)
+        ).sample((n_surface,))
+        u_bottom = torch.distributions.Beta(
+            torch.tensor(3.0, device=device),
+            torch.tensor(1.0, device=device)
+        ).sample((n_bottom,))
+        u_interior = torch.rand(n_interior, device=device)
+        u_chunk = torch.cat([u_surface, u_bottom, u_interior]).reshape(-1, 1)
 
-            # ✅ GPU-OPTIMIZED: Accumulate on GPU (no .item() call)
-            loss_accum_gpu["pde"] += (res_pde**2).sum().detach()
-            n_pde_points += len(z_chunk)
-    else:
-        # Generate samples on the fly (no cache)
-        if t_max is None:
-            raise ValueError("t_max must be provided when cache_manager is None")
+        # Map u to z using predicted water table depth
+        zb_chunk = model.predict_water_table(t_chunk)
 
-        # Generate samples using direct sampling approach
-        for i in range(0, sample_size, chunk_size):
-            chunk_batch_size = min(chunk_size, sample_size - i)
+        # Create z_chunk and enable gradients for PDE residual computation
+        z_chunk = (-u_chunk * zb_chunk).detach().requires_grad_(True)
+        t_chunk_grad = t_chunk.detach().requires_grad_(True)
 
-            # Sample time uniformly
-            t_chunk = torch.rand(chunk_batch_size, 1, device=device) * t_max
+        # Compute PDE residual (needs gradients enabled for physics derivatives)
+        res_pde = model.pde_residual(z_chunk, t_chunk_grad)
 
-            # Sample normalized depth u ∈ [0,1]
-            n_boundary = int(chunk_batch_size * boundary_ratio)
-            n_interior = chunk_batch_size - n_boundary
-            n_surface = n_boundary // 2
-            n_bottom = n_boundary - n_surface
-
-            # Sample directly on GPU (avoid CPU→GPU transfer)
-            u_surface = torch.distributions.Beta(
-                torch.tensor(1.0, device=device),
-                torch.tensor(3.0, device=device)
-            ).sample((n_surface,))
-            u_bottom = torch.distributions.Beta(
-                torch.tensor(3.0, device=device),
-                torch.tensor(1.0, device=device)
-            ).sample((n_bottom,))
-            u_interior = torch.rand(n_interior, device=device)
-            u_chunk = torch.cat([u_surface, u_bottom, u_interior]).reshape(-1, 1)
-
-            # Map u to z using predicted water table depth
-            zb_chunk = model.predict_water_table(t_chunk)
-
-            # Create z_chunk and enable gradients for PDE residual computation
-            z_chunk = (-u_chunk * zb_chunk).detach().requires_grad_(True)
-            t_chunk_grad = t_chunk.detach().requires_grad_(True)
-
-            # Compute PDE residual (needs gradients enabled for physics derivatives)
-            res_pde = model.pde_residual(z_chunk, t_chunk_grad)
-
-            # ✅ GPU-OPTIMIZED: Accumulate on GPU (no .item() call)
-            loss_accum_gpu["pde"] += (res_pde**2).sum().detach()
-            n_pde_points += len(z_chunk)
+        # ✅ GPU-OPTIMIZED: Accumulate on GPU (no .item() call)
+        loss_accum_gpu["pde"] += (res_pde**2).sum().detach()
+        n_pde_points += len(z_chunk)
 
     loss_accum_gpu["pde"] /= n_pde_points
 

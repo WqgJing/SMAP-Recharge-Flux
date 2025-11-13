@@ -34,12 +34,8 @@ network:
     num_layers: 3
 
 sampling:
-  cache_size: 80000
-  batch_size: 4000
-  resample_freq: 100
-  boundary_ratio: 0.85        # 85% boundary focus (vs 70% baseline)
-  high_residual_ratio: 0.7    # More aggressive residual sampling
-  temperature: 0.2            # Sharper focus on high residuals
+  batch_size: 4000           # Points sampled per iteration (GPU-optimized: use 2000-10000+)
+  boundary_ratio: 0.85       # 85% boundary focus (vs 70% baseline)
 
 boundary_sampling:
   batch_size_bc: 400          # 400 BC points (vs 250 baseline)
@@ -69,7 +65,6 @@ physics:
   L: 4.0
   S_max: 1.0e-7
   zb_initial: 6.1
-  ic_type: 'hydrostatic'
 
 output:
   dir: 'outputs_aggressive_bc'
