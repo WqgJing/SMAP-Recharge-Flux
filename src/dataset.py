@@ -208,7 +208,7 @@ class PINNDataset:
 
         if self.verbose:
             print(f"\n✓ Initial Condition: Using parabolic profile")
-            print(f"  Surface moisture from first observation: θ₀ = {theta0_times.iloc[0]:.4f} m³/m³")
+            print(f"  Surface moisture from first observation: θ₀ = {ic_theta[0]:.4f} m³/m³")
             print(f"  Measurement points: {len(ic_depths)}")
             for depth_m, theta_val in zip(ic_depths, ic_theta):
                 depth_cm = depth_m * 100
