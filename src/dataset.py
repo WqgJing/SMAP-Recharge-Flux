@@ -206,6 +206,13 @@ class PINNDataset:
                 ic_depths.append(depth_m)
                 ic_theta.append(theta_ic)
 
+        # Store initial condition metadata for external access (e.g., notebooks)
+        self.ic_type = 'parabolic'
+        self.ic_profile = {
+            'depths': np.array(ic_depths, dtype=np.float64),
+            'theta': np.array(ic_theta, dtype=np.float64),
+        }
+
         if self.verbose:
             print(f"\n✓ Initial Condition: Using parabolic profile")
             print(f"  Surface moisture from first observation: θ₀ = {ic_theta[0]:.4f} m³/m³")

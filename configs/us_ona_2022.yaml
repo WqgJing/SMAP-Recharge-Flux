@@ -11,8 +11,8 @@
 # ============================================================================
 data:
   path: 'data/AMF_US-ONA_BASE_HH_4-5.csv'
-  start_date: '2021-06-21'   # Start of 2022
-  end_date: '2021-07-9'     # 2021-09-01
+  start_date: '2021-04-01'   # Start of 2022
+  end_date: '2021-07-01'     # 2021-09-01
   interpolate: true
   max_gap_hours: 6
 
